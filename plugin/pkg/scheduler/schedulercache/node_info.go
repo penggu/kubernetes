@@ -73,7 +73,19 @@ type Resource struct {
 	AllowedPodNumber int
 	// ScalarResources
 	ScalarResources map[v1.ResourceName]int64
-	// TODO: Add individual GPU detail
+	// NVidia GPU information list
+	NvidiaGPUInfoList []NvidiaGPUInfo
+}
+
+type NvidiaGPUInfo struct {
+	// In the release 430, this Id is interpreted as a physical GPU id.
+	// After the release 530, it will be interpreted as a logical GPU id.
+	Id      string
+	Healthy bool
+	// The usage sum of all pods on this GPU, and its range is [0, 10ls0]
+	Usage int64
+	// It uses podId as key, and the value is the use percentage of this pod on this GPU
+	PodUsage map[string]int64
 }
 
 // New creates a Resource from ResourceList

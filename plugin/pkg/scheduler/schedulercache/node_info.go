@@ -73,6 +73,7 @@ type Resource struct {
 	AllowedPodNumber int
 	// ScalarResources
 	ScalarResources map[v1.ResourceName]int64
+	// TODO: Add individual GPU detail
 }
 
 // New creates a Resource from ResourceList

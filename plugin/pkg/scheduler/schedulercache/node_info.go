@@ -83,7 +83,7 @@ type NvidiaGPUInfo struct {
 	// After the release 530, it will be interpreted as a logical GPU id.
  	Id string
  	Healthy bool
- 	// The usage sum of all pods on this GPU, and its range is [0, 10ls0]
+ 	// The usage sum of all pods on this GPU, and its range is [0, 100]
  	Usage int64
 	// It uses podId as key, and the value is the use percentage of this pod on this GPU
  	PodUsage map[string]int64
@@ -497,12 +497,11 @@ func (n *NodeInfo) SetNode(node *v1.Node) error {
 		if err != nil {
 			// TODO: something
 		}
+		// Track individual allocations in requestedResource
 		for _,status := range gpus {
-			if n.allocatableResource != nil {
-				n.allocatableResource.AddNvidiaGpuInfo(
-					&NvidiaGPUInfo{ Id : status.Id,
-						        Healthy : status.Healthy })
-			}
+			n.requestedResource.AddNvidiaGpuInfo(
+				&NvidiaGPUInfo{ Id : status.Id,
+					        Healthy : status.Healthy })
 		}
 	}
 

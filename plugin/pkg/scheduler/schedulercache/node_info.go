@@ -105,12 +105,24 @@ func (g *NvidiaGPUInfo) Clone() *NvidiaGPUInfo {
 	return res
 }
 
+// Lazily allocate pod usage map.
 func (g *NvidiaGPUInfo) SetPodUsage(podid string, usage int64) {
-	// Lazily allocate pod usage map.
 	if g.PodUsage == nil {
 		g.PodUsage = map[string]int64{}
 	}
 	g.PodUsage[podid] = usage
+}
+
+// Remove a pod usage from the map, return amount removed
+func (g *NvidiaGPUInfo) UnsetPodUsage(podid string) int64 {
+	if g.PodUsage == nil {
+		return 0
+	}
+	if amount,ok := g.PodUsage[podid]; ok {
+		delete(g.PodUsage,podid)
+		return amount
+	}
+	return 0
 }
 
 // New creates a Resource from ResourceList
@@ -121,9 +133,26 @@ func NewResource(rl v1.ResourceList) *Resource {
 }
 
 // Add a new NvidiaGpuInfo to the list
-func (r *Resource) AddNvidiaGpuInfo(g *NvidiaGPUInfo) *Resource {
+func (r *Resource) AddNvidiaGpuInfo(g *NvidiaGPUInfo) {
 	r.NvidiaGPUInfoList = append(r.NvidiaGPUInfoList,*g)
-	return r
+}
+
+// Add pod with given amount to the allocation of a gpu
+func (r *Resource) AddNvidiaGpuAlloc4Pod(gpuid string, podid string, amount int64) {
+	for _,gpu := range r.NvidiaGPUInfoList {
+		if gpu.Id == gpuid {
+			gpu.Usage += amount
+			gpu.SetPodUsage(podid,amount)
+		}
+	}
+}
+
+// Remove pod from the allocation of a gpu
+func (r *Resource) RemoveNvidiaGpuAlloc4Pod(podid string) {
+	for _,gpu := range r.NvidiaGPUInfoList {
+		amount := gpu.UnsetPodUsage(podid)
+		gpu.Usage -= amount
+	}
 }
 
 // Add adds ResourceList into Resource.
@@ -358,7 +387,28 @@ func (n *NodeInfo) AddPod(pod *v1.Pod) {
 	res, non0_cpu, non0_mem := calculateResource(pod)
 	n.requestedResource.MilliCPU += res.MilliCPU
 	n.requestedResource.Memory += res.Memory
+
+	// Total NvidiaGPU amount
 	n.requestedResource.NvidiaGPU += res.NvidiaGPU
+	// Update allocation to individual GPU
+	a := pod.GetAnnotations()
+	if val, ok := a[v1.NvidiaGPUDecisionKey]; ok {
+		var gpuallocs v1.NvidiaGPUDecision
+		err := json.Unmarshal([]byte(val),&gpuallocs)
+		if err != nil {
+			glog.Errorf("Cannot parse json gpu decision, err: %v", err)
+		} else {
+			for gpuid,amount := range gpuallocs {
+				podid, err := getPodKey(pod)
+				if err != nil {
+					glog.Errorf("Cannot get pod key, err: %v", err)
+					continue
+				}
+				n.requestedResource.AddNvidiaGpuAlloc4Pod(gpuid, podid, amount)
+			}
+		}
+	}
+
 	n.requestedResource.EphemeralStorage += res.EphemeralStorage
 	if n.requestedResource.ScalarResources == nil && len(res.ScalarResources) > 0 {
 		n.requestedResource.ScalarResources = map[v1.ResourceName]int64{}
@@ -414,7 +464,12 @@ func (n *NodeInfo) RemovePod(pod *v1.Pod) error {
 
 			n.requestedResource.MilliCPU -= res.MilliCPU
 			n.requestedResource.Memory -= res.Memory
+
+			// Remove from total requested NvidiaGPU
 			n.requestedResource.NvidiaGPU -= res.NvidiaGPU
+			// Remove from individual GPU device
+			n.requestedResource.RemoveNvidiaGpuAlloc4Pod(k1)
+
 			if len(res.ScalarResources) > 0 && n.requestedResource.ScalarResources == nil {
 				n.requestedResource.ScalarResources = map[v1.ResourceName]int64{}
 			}
@@ -495,13 +550,14 @@ func (n *NodeInfo) SetNode(node *v1.Node) error {
 		var gpus v1.NvidiaGPUStatusList
 		err := json.Unmarshal([]byte(val),&gpus)
 		if err != nil {
-			// TODO: something
-		}
-		// Track individual allocations in requestedResource
-		for _,status := range gpus {
-			n.requestedResource.AddNvidiaGpuInfo(
-				&NvidiaGPUInfo{ Id : status.Id,
-					        Healthy : status.Healthy })
+			glog.Errorf("Cannot parse json gpu status, err: %v", err)
+		} else {
+			// Track individual allocations in requestedResource
+			for _,status := range gpus {
+				n.requestedResource.AddNvidiaGpuInfo(
+					&NvidiaGPUInfo{ Id : status.Id,
+					 	       Healthy : status.Healthy })
+			}
 		}
 	}
 

@@ -83,9 +83,9 @@ type NvidiaGPUInfo struct {
 	// After the release 530, it will be interpreted as a logical GPU id.
  	Id string
  	Healthy bool
- 	// The usage sum of all pods on this GPU, and its range is [0, 100]
+ 	// The usage sum of all pods on this GPU in millis, and its range is [0, 1000]
  	Usage int64
-	// It uses podId as key, and the value is the use percentage of this pod on this GPU
+	// It uses podId as key, and the value is the usage of this pod on this GPU in millis
  	PodUsage map[string]int64
 }
 

@@ -665,6 +665,22 @@ func PodFitsResources(pod *v1.Pod, meta algorithm.PredicateMetadata, nodeInfo *s
 		predicateFails = append(predicateFails, NewInsufficientResourceError(v1.ResourceNvidiaGPU, podRequest.NvidiaGPU, nodeInfo.RequestedResource().NvidiaGPU, allocatable.NvidiaGPU))
 	}
 
+	// Check for resources on individual GPUs, if there are no individual
+	// GPU infos in the nodeInfo, then skip the check and assume it passed
+	requested := nodeInfo.RequestedResource()
+	ok := false
+	if len(requested.NvidiaGPUInfoList) == 0 {
+		ok = true
+	}
+	for _,gpu := range requested.NvidiaGPUInfoList {
+		if 1000 >= podRequest.NvidiaGPU + gpu.Usage {
+			ok = true
+		}
+	}
+	if !ok {
+		predicateFails = append(predicateFails, ErrInsufficientResourceOnSingleGPU)
+	}
+
 	if allocatable.EphemeralStorage < podRequest.EphemeralStorage+nodeInfo.RequestedResource().EphemeralStorage {
 		predicateFails = append(predicateFails, NewInsufficientResourceError(v1.ResourceEphemeralStorage, podRequest.EphemeralStorage, nodeInfo.RequestedResource().EphemeralStorage, allocatable.EphemeralStorage))
 	}

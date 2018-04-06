@@ -5168,9 +5168,13 @@ const (
 
 const (
 	// Node annotation name for GPU status
-	NvidiaGPUStatusKey = "huawei.com/gpu-status"
+	NvidiaGPUStatusAnnotationKey = "huawei.com/gpu-status"
 	// Pod annotation name for scheduler GPU decision
-	NvidiaGPUDecisionKey = "huawei.com/gpu-decision"
+	NvidiaGPUDecisionAnnotationKey = "huawei.com/gpu-decision"
+	// Device Plugin resource name used for special handlin
+	NvidiaGPUScalarResourceName = "nvidia.com/gpu"
+	// Maximum possible usage of a GPU in millis
+	NvidiaGPUMaxUsage = 1000
 )
 
 // Store physical id and health status of a single GPU

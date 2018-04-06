@@ -392,7 +392,7 @@ func (n *NodeInfo) AddPod(pod *v1.Pod) {
 	n.requestedResource.NvidiaGPU += res.NvidiaGPU
 	// Update allocation to individual GPU
 	a := pod.GetAnnotations()
-	if val, ok := a[v1.NvidiaGPUDecisionKey]; ok {
+	if val, ok := a[v1.NvidiaGPUDecisionAnnotationKey]; ok {
 		var gpuallocs v1.NvidiaGPUDecision
 		err := json.Unmarshal([]byte(val),&gpuallocs)
 		if err != nil {
@@ -546,7 +546,7 @@ func (n *NodeInfo) SetNode(node *v1.Node) error {
 	// Add a new NvidiaGPUInfo to the list for each GPU
 	// Populate the data from the Node annotation
 	a := node.GetAnnotations()
-	if val, ok := a[v1.NvidiaGPUStatusKey]; ok {
+	if val, ok := a[v1.NvidiaGPUStatusAnnotationKey]; ok {
 		var gpus v1.NvidiaGPUStatusList
 		err := json.Unmarshal([]byte(val),&gpus)
 		if err != nil {

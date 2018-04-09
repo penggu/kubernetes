@@ -673,6 +673,10 @@ func PodFitsResources(pod *v1.Pod, meta algorithm.PredicateMetadata, nodeInfo *s
 		if allocatable.ScalarResources[rName] < rQuant+nodeInfo.RequestedResource().ScalarResources[rName] {
 			predicateFails = append(predicateFails, NewInsufficientResourceError(rName, podRequest.ScalarResources[rName], nodeInfo.RequestedResource().ScalarResources[rName], allocatable.ScalarResources[rName]))
 		}
+		// Check for resources on individual GPUs
+		if rName == v1.NvidiaGPUScalarResourceName && !podFitsNvidiaGPUDevice(rQuant,nodeInfo){
+			predicateFails = append(predicateFails, ErrInsufficientResourceOnSingleGPU)
+		}
 	}
 
 	if glog.V(10) {
@@ -684,6 +688,21 @@ func PodFitsResources(pod *v1.Pod, meta algorithm.PredicateMetadata, nodeInfo *s
 		}
 	}
 	return len(predicateFails) == 0, predicateFails, nil
+}
+
+// True if some GPU device on the node has enough availability for the request or if there
+// are no devices in the GPUInfoList (in which case the check trivially passes)
+func podFitsNvidiaGPUDevice(gpureq int64, nodeInfo *schedulercache.NodeInfo) bool {
+	requested := nodeInfo.RequestedResource()
+	if len(requested.NvidiaGPUInfoList) == 0 {
+		return true
+	}
+	for _, gpu := range requested.NvidiaGPUInfoList {
+		if v1.NvidiaGPUMaxUsage >= gpureq + gpu.Usage {
+			return true
+		}
+	}
+	return false
 }
 
 // nodeMatchesNodeSelectorTerms checks if a node's labels satisfy a list of node selector terms,

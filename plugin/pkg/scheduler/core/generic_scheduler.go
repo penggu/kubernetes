@@ -961,7 +961,8 @@ func nodesWherePreemptionMightHelp(pod *v1.Pod, nodes []*v1.Node, failedPredicat
 				predicates.ErrNodeUnknownCondition,
 				predicates.ErrVolumeZoneConflict,
 				predicates.ErrVolumeNodeConflict,
-				predicates.ErrVolumeBindConflict:
+				predicates.ErrVolumeBindConflict,
+				predicates.ErrInsufficientResourceOnSingleGPU:
 				unresolvableReasonExist = true
 				break
 				// TODO(bsalamat): Please add affinity failure cases once we have specific affinity failure errors.

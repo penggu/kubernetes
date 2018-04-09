@@ -5165,3 +5165,28 @@ const (
 	// and data streams for a single forwarded connection
 	PortForwardRequestIDHeader = "requestID"
 )
+
+const (
+	// Node annotation name for GPU status
+	NvidiaGPUStatusAnnotationKey = "huawei.com/gpu-status"
+	// Pod annotation name for scheduler GPU decision
+	NvidiaGPUDecisionAnnotationKey = "huawei.com/gpu-decision"
+	// Device Plugin resource name used for special handlin
+	NvidiaGPUScalarResourceName = "nvidia.com/gpu"
+	// Maximum possible usage of a GPU in millis
+	NvidiaGPUMaxUsage = 1000
+)
+
+// Store physical id and health status of a single GPU
+type NvidiaGPUStatus struct {
+	// Store the physical GPU id
+	Id string `json:"id"`
+	// Health status
+	Healthy	bool `json:"healthy"`
+}
+
+// Store all GPU statuses of a node in Node annotation
+type NvidiaGPUStatusList []NvidiaGPUStatus
+
+// Store scheduler GPU allocation decision in Pod annotation
+type NvidiaGPUDecision map[string]int64

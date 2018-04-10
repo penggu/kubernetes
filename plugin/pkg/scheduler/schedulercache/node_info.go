@@ -74,15 +74,17 @@ type Resource struct {
 	// ScalarResources
 	ScalarResources map[v1.ResourceName]int64
 	// NVidia GPU information list
-	NvidiaGPUInfoList []NvidiaGPUInfo
+	// In the release 430, a key is interpreted as a physical GPU id.
+	// After the release 530, the key will be interpreted as a logical GPU id.
+	NvidiaGPUInfoMap map[string]NvidiaGPUInfo
 }
 
 type NvidiaGPUInfo struct {
-	// In the release 430, this Id is interpreted as a physical GPU id.
-	// After the release 530, it will be interpreted as a logical GPU id.
-	Id      string
+	// This Id will store logical GPU id from Scheduler.
+	Id string
+	// Health Status
 	Healthy bool
-	// The usage sum of all pods on this GPU, and its range is [0, 10ls0]
+	// The usage sum of all pods on this GPU, and its range is [0, 100]
 	Usage int64
 	// It uses podId as key, and the value is the use percentage of this pod on this GPU
 	PodUsage map[string]int64
@@ -109,6 +111,7 @@ func (r *Resource) Add(rl v1.ResourceList) {
 			r.Memory += rQuant.Value()
 		case v1.ResourceNvidiaGPU:
 			r.NvidiaGPU += rQuant.Value()
+
 		case v1.ResourcePods:
 			r.AllowedPodNumber += int(rQuant.Value())
 		case v1.ResourceEphemeralStorage:

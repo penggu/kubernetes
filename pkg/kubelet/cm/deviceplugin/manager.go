@@ -33,12 +33,21 @@ import (
 	"k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/apimachinery/pkg/util/uuid"
+	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	v1helper "k8s.io/kubernetes/pkg/apis/core/v1/helper"
+	kubefeatures "k8s.io/kubernetes/pkg/features"
 	pluginapi "k8s.io/kubernetes/pkg/kubelet/apis/deviceplugin/v1alpha"
 	"k8s.io/kubernetes/pkg/kubelet/config"
 	"k8s.io/kubernetes/pkg/kubelet/lifecycle"
 	"k8s.io/kubernetes/pkg/kubelet/metrics"
 	"k8s.io/kubernetes/plugin/pkg/scheduler/schedulercache"
+)
+
+const (
+	StatusTag = "StatusTag"
+	GPUStatusAnnotation = "Huawei.com/GPU-Status"
+	GPUDecisionAnnotation = "www.huawei.com/gpu_decision"
 )
 
 // ActivePodsFunc is a function that returns a list of pods to reconcile.
@@ -80,6 +89,46 @@ type ManagerImpl struct {
 
 	// podDevices contains pod to allocated device mapping.
 	podDevices podDevices
+
+	// NVidia GPU status map, and key is GPU physical Id.
+	gpuStatus map[string]NvidiaGPUStatus
+
+	// NVidia GPU information map, and the key is GPU physical Id.
+	gpuAssignInfo map[string]GPUAllocationInfo
+
+	// It records all active allocations, and the key is a logical Id
+	gpuActiveAllocats map[string]Allocation
+}
+
+// NvidiaGPUDecision maps physical GPU id to requested GPU portion in the release 430, and logical GPU id to requested number in the release 530
+type NvidiaGPUDecision map[string]int64
+
+// GPUAllocations maps logical GPU id to the structure with GPU device Id and requested GPU portion.
+type GPUAllocations map[string]Allocation
+
+type Allocation struct {
+	// This Id will store Physical GPU id from device plugin.
+	Id string
+	// GPU allocation fraction in millis unit
+	Amount int64
+}
+
+type NvidiaGPUStatus struct {
+	// This Id will store Physical GPU id from device plugin.
+	Id string `json:"id,omitempty"`
+	// Health Status.
+	Healthy bool `json:"healthy,omitempty"`
+}
+
+type GPUAllocationInfo struct {
+	// This Id will store logical GPU id from Scheduler in the future release, and it is filled with pod id right now.
+	Ids sets.String
+	// This map maps logical GPU id to pod id
+	PodIds map[string]string
+	// The usage sum of all pods on this GPU, and its range is [0, 1000]
+	Usage int64
+	// It uses podId as key, and the value is the use percentage of this pod on this GPU
+	PodUsage map[string]int64
 }
 
 type sourcesReadyStub struct{}
@@ -101,12 +150,15 @@ func newManagerImpl(socketPath string) (*ManagerImpl, error) {
 
 	dir, file := filepath.Split(socketPath)
 	manager := &ManagerImpl{
-		endpoints:        make(map[string]endpoint),
-		socketname:       file,
-		socketdir:        dir,
-		allDevices:       make(map[string]sets.String),
-		allocatedDevices: make(map[string]sets.String),
-		podDevices:       make(podDevices),
+		endpoints:         make(map[string]endpoint),
+		socketname:        file,
+		socketdir:         dir,
+		allDevices:        make(map[string]sets.String),
+		allocatedDevices:  make(map[string]sets.String),
+		podDevices:        make(podDevices),
+		gpuStatus:         make(map[string]NvidiaGPUStatus),
+		gpuAssignInfo:     make(map[string]GPUAllocationInfo),
+		gpuActiveAllocats: make(map[string]Allocation),
 	}
 	manager.callback = manager.genericDeviceUpdateCallback
 
@@ -127,17 +179,46 @@ func (m *ManagerImpl) genericDeviceUpdateCallback(resourceName string, added, up
 	// For now, Manager only keeps track of healthy devices.
 	// TODO: adds support to track unhealthy devices.
 	for _, dev := range kept {
+		var gpuStatus NvidiaGPUStatus
+		if utilfeature.DefaultFeatureGate.Enabled(kubefeatures.MultiGPUScheduling) &&
+			resourceName == string(v1.ResourceNvidiaGPU) {
+				gpuStatus = NvidiaGPUStatus{
+					Id:       nil,      // this Id will be assigned a logical Id when it is allocated to a Pod.
+					Healthy:  true,
+				}
+				m.gpuStatus[dev.ID] = gpuStatus
+		}
 		if dev.Health == pluginapi.Healthy {
 			m.allDevices[resourceName].Insert(dev.ID)
 		} else {
 			m.allDevices[resourceName].Delete(dev.ID)
+			if utilfeature.DefaultFeatureGate.Enabled(kubefeatures.MultiGPUScheduling) &&
+				resourceName == string(v1.ResourceNvidiaGPU) {
+				gpuStatus.Healthy = false
+			}
 		}
 	}
 	for _, dev := range deleted {
 		m.allDevices[resourceName].Delete(dev.ID)
+		if utilfeature.DefaultFeatureGate.Enabled(kubefeatures.MultiGPUScheduling) &&
+			resourceName == string(v1.ResourceNvidiaGPU) {
+				m.removeGPUAllocation(dev.ID)
+		}
 	}
 	m.mutex.Unlock()
 	m.writeCheckpoint()
+}
+
+// removeGPUAllocation removes all allocation information related to a device id
+func (m *ManagerImpl) removeGPUAllocation(deviceId string) {
+	// copy the logical id list in assigned GPU map.
+	idList := m.gpuAssignInfo[deviceId].Ids.List()
+	for _, id := range idList {
+		podId := m.gpuAssignInfo[deviceId].PodIds[id]
+		delete(m.gpuActiveAllocats, podId)
+		delete(m.gpuAssignInfo[deviceId].PodIds, id)
+	}
+	delete(m.gpuAssignInfo, deviceId) // Physical Id and GPU allocation information is un-bound now.
 }
 
 func (m *ManagerImpl) removeContents(dir string) error {
@@ -393,6 +474,10 @@ func (m *ManagerImpl) GetCapacity() (v1.ResourceList, []string) {
 			delete(m.allDevices, resourceName)
 			deletedResources = append(deletedResources, resourceName)
 			needsUpdateCheckpoint = true
+			if utilfeature.DefaultFeatureGate.Enabled(kubefeatures.MultiGPUScheduling) &&
+				resourceName == string(v1.ResourceNvidiaGPU) {
+					m.remGPUStatus()
+			}
 		} else {
 			capacity[v1.ResourceName(resourceName)] = *resource.NewQuantity(int64(devices.Len()), resource.DecimalSI)
 		}
@@ -401,7 +486,45 @@ func (m *ManagerImpl) GetCapacity() (v1.ResourceList, []string) {
 	if needsUpdateCheckpoint {
 		m.writeCheckpoint()
 	}
+	if utilfeature.DefaultFeatureGate.Enabled(kubefeatures.MultiGPUScheduling) {
+		if len(m.gpuStatus) != 0 {
+			statusListJson, err := genStatusJsonWithTag(m.gpuStatus)
+			if err != nil {
+				glog.V(2).Infof("failed marshalling status list: %v", err)
+			}
+			deletedResources = append(deletedResources, statusListJson)
+		}
+	}
+
 	return capacity, deletedResources
+}
+
+func genStatusJsonWithTag(mp map[string]NvidiaGPUStatus) (string, error) {
+	statusList := make([]NvidiaGPUStatus, 0)
+	for id, status := range mp {
+		newStatus := NvidiaGPUStatus{
+			Id:      id,
+			Healthy: status.Healthy,
+		}
+		statusList = append(statusList, newStatus)
+	}
+	jsonStatus, err := json.Marshal(statusList)
+	if err != nil {
+		glog.V(2).Infof("failed marshalling status list: %v", err)
+		return "", err
+	}
+	statusStr := StatusTag + string(jsonStatus)
+
+	return statusStr, nil
+}
+
+func (m *ManagerImpl) remGPUStatus() {
+	for id, _ := range m.gpuStatus {
+		delete(m.gpuStatus, id) // Release physical id related GPU status.
+	}
+	for id, _ := range m.gpuActiveAllocats {
+		delete(m.gpuActiveAllocats, id) // Logical id is not bound with any physical id now.
+	}
 }
 
 // checkpointData struct is used to store pod to device allocation information
@@ -476,10 +599,257 @@ func (m *ManagerImpl) updateAllocatedDevices(activePods []*v1.Pod) {
 	if len(podsToBeRemoved) <= 0 {
 		return
 	}
+	// update pods's usage for those pods in removed pod list.
+	if utilfeature.DefaultFeatureGate.Enabled(kubefeatures.MultiGPUScheduling) {
+		m.rmGPUUsageByPods(podsToBeRemoved.List())
+	}
 	glog.V(3).Infof("pods to be removed: %v", podsToBeRemoved.List())
 	m.podDevices.delete(podsToBeRemoved.List())
 	// Regenerated allocatedDevices after we update pod allocation information.
 	m.allocatedDevices = m.podDevices.devices()
+}
+
+func (m *ManagerImpl) rmGPUUsageByPods(removedPods []string) {
+	for _, podId := range removedPods {
+		containerDevices := m.podDevices[podId]
+		for _, resources := range containerDevices {
+			for resource, devices := range resources {
+				if resource == string(v1.ResourceNvidiaGPU) {
+					for id := range devices.deviceIds {
+						m.rmPodGPUUsage(id, podId)
+					}
+				}
+			}
+		}
+	}
+}
+
+// method addPodGPUUsage add a pod usage to GPUAssignInfo structure with a logical id
+func (m *ManagerImpl) addPodGPUUsage(id string, podId string) {
+	alloc, found := m.gpuActiveAllocats[id]
+	if !found {
+		glog.Errorf("No logical Id %s related active allocation is found", id)
+	}
+	devId := alloc.Id
+	amount := alloc.Amount
+	m.mutex.Lock()
+	info, found := m.gpuAssignInfo[devId]
+	if !found {
+		info = GPUAllocationInfo{
+			Ids:      sets.NewString(),
+			Usage:    0,
+			PodIds:   make(map[string]string),
+			PodUsage: make(map[string]int64),
+		}
+		m.gpuAssignInfo[devId] = info
+	}
+	info.Ids.Insert(id)
+	info.PodIds[id] = podId
+	info.PodUsage[podId] = amount
+	info.Usage += amount
+	m.mutex.Unlock()
+	//TODO: add more handling in the future release
+	if info.Usage > 1 {
+		glog.Errorf("There is too much request on this GPU %s", devId)
+	}
+}
+
+// rmPodGPUUsage removes all podId related usage in GPU identified by deviceId. If after this pod usage clean,
+// there is no any pod usage in this GPU, then clean this deviceId related assignment information
+func (m *ManagerImpl) rmPodGPUUsage(deviceId string, podId string) {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+	info, found := m.gpuAssignInfo[deviceId]
+	if !found {
+		glog.Errorf("no device Id %s related assignment information is found", deviceId)
+		return
+	}
+	used, found := info.PodUsage[podId]
+	if !found {
+		glog.Errorf("no pod id %s related assignment information is found", podId)
+		return
+	}
+	info.Usage -= used
+	delete(info.PodUsage, podId)
+	var lId string
+	for logId, pId := range info.PodIds {
+		if pId == podId {
+			lId = logId
+			delete(info.PodIds, logId)
+			break
+		}
+	}
+	if len(lId) == 0 {
+		glog.Errorf("no pod id%s related logical Id is found", podId)
+		return
+	}
+	info.Ids.Delete(lId)
+	if len(info.Ids) == 0 && info.Usage == 0 {
+		delete(m.gpuAssignInfo, deviceId)
+	}
+}
+
+// Returns list of device Ids we need to allocate with Allocate rpc call.
+// Returns empty list in case we don't need to issue the Allocate rpc call.
+func (m *ManagerImpl) GPUsToAllocate(podUID, contName string, decisions GPUAllocations, required int, reusableDevices sets.String) (sets.String, error) {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+	needed := int64(required)
+	resource := string(v1.ResourceNvidiaGPU)
+	// Gets list of devices that have already been allocated.
+	// This can happen if a container restarts for example.
+	devices := m.podDevices.containerDevices(podUID, contName, resource)
+	if devices != nil {
+		glog.V(3).Infof("Found pre-allocated devices for resource %s container %q in Pod %q: %v", resource, contName, podUID, devices.List())
+		used, err := m.getGPUsUsage(devices)
+		if err != nil {
+			return nil, fmt.Errorf("can't find physical id in GPU assign struct")
+		}
+		needed = needed - used
+		// A pod's resource is not expected to change once admitted by the API server,
+		// so just fail loudly here. We can revisit this part if this no longer holds.
+		if needed != 0 {
+			return nil, fmt.Errorf("pod %v container %v changed request for resource %v from %v to %v", podUID, contName, resource, devices.Len(), required)
+		}
+	}
+	if needed == 0 {
+		// No change, no work.
+		return nil, nil
+	}
+	glog.V(3).Infof("Needs to allocate %v %v for pod %q container %q", needed, resource, podUID, contName)
+	// Needs to allocate additional devices.
+	if _, ok := m.allDevices[resource]; !ok {
+		return nil, fmt.Errorf("can't allocate unregistered device %v", resource)
+	}
+	devices = sets.NewString()
+	// In the release 430, the Scheduler has already assigned GPU device Id for the Pod's GPU request.
+	// Check the decisions to see whether each GPU device Id there, If yes, then update allocatedDevices structure.
+	var assigned int64
+	for _, alloc := range decisions {
+		device := alloc.Id
+		if len(device) != 0 {
+			assigned += alloc.Amount
+			m.allocatedDevices[resource].Insert(device)
+			devices.Insert(device)
+		} else {
+			// if there is one logical Id is not bound with device Id, it means that allocation need be bound with device Id
+			break
+		}
+	}
+	// If all the assignments are filled with device Id, we can return the devices right now.
+	if assigned == int64(required) {
+		return devices, nil
+	}
+
+	// In the release 430, the following code should not be executed. If it is touched, then something is wrong
+	glog.Errorf("!!!!!!!!! something error !!!!!!!!!!!")
+
+	// Allocates from reusableDevices list first.
+	// TODO: doubt that this block will really be called, and need to revisit this block again.
+	// Needs to allocate additional devices.
+	if m.allocatedDevices[resource] == nil {
+		m.allocatedDevices[resource] = sets.NewString()
+	}
+
+	for device := range reusableDevices {
+		if !m.allocatedDevices[resource].Has(device) {
+			m.allocatedDevices[resource].Insert(device)
+		}
+		devices.Insert(device)
+		needed -= 1000 - m.gpuAssignInfo[device].PodUsage[podUID]
+
+		// TODO: need to call m.addGPUPodUsage method here in the release 530
+
+		glog.V(2).Infof("assignment device Id: %s and its usage: %d", device, m.gpuAssignInfo[device].PodUsage[podUID])
+		if needed == 0 {
+			return devices, nil
+		}
+	}
+
+	// Gets available GPU portion number
+	avail := m.getAllGPUAvailable()
+	if avail < needed {
+		return nil, fmt.Errorf("requested number of devices unavailable for %s. Requested: %d, Available: %d", resource, needed, avail)
+	}
+	// TODO: this function will be implemented in release 530 in details
+	allocated := m.allocateGPU(decisions)
+
+	// Updates m.allocatedDevices with allocated devices to prevent them
+	// from being allocated to other pods/containers, given that we are
+	// not holding lock during the rpc call.
+	for logId := range allocated {
+		device := m.gpuActiveAllocats[logId].Id
+		podId := m.gpuAssignInfo[device].PodIds[logId]
+		m.allocatedDevices[resource].Insert(device)
+		devices.Insert(device)
+
+		// At this point, assuming the binding between gpu id from the Scheduler and device id is established,
+		// and we just need to update the GPU assignment status here.
+		m.addPodGPUUsage(logId, podId)
+	}
+	return devices, nil
+}
+
+// TODO: This is a mock function to return empty GPU slice in current release, and it will be implemented in release 530
+// allocateGPU will bind the GPU logical id with the GPU device id, and return the assigned logical Id list.
+func (m *ManagerImpl) allocateGPU(reqs GPUAllocations) sets.String {
+	ret := sets.NewString()
+	for logId, req := range reqs {
+		alloc := m.gpuActiveAllocats[logId]
+		alloc.Id = string("")
+		alloc.Amount = req.Amount
+		ret.Insert(logId)
+	}
+	return ret
+}
+
+func (m *ManagerImpl) getGPUsUsage(ids sets.String) (int64, error) {
+	var use int64
+	for id := range ids {
+		assign, found := m.gpuAssignInfo[id]
+		if !found {
+			glog.Errorf("can't find physical id %s in GPU assign struct", id)
+			return 0, fmt.Errorf("can't find physical id in GPU assign struct")
+		}
+		use += assign.Usage
+	}
+	return use, nil
+}
+
+func (m *ManagerImpl) getGPUInUse() sets.String {
+	used := sets.NewString()
+	for id, info := range m.gpuAssignInfo {
+		if info.Usage > 0 {
+			used.Insert(id)
+		}
+	}
+	return used
+}
+
+func (m *ManagerImpl) getAllGPUUsage() int64 {
+	var used int64
+	for _, info := range m.gpuAssignInfo {
+		used += info.Usage
+	}
+	return used
+}
+
+func (m *ManagerImpl) getAvailableGPUs() sets.String {
+	used := sets.NewString()
+	for id, info := range m.gpuAssignInfo {
+		if info.Usage < 1000 {
+			used.Insert(id)
+		}
+	}
+	return used
+}
+
+func (m *ManagerImpl) getAllGPUAvailable() int64 {
+	var avail int64
+	for _, info := range m.gpuAssignInfo {
+		avail += 1000 - info.Usage
+	}
+	return avail
 }
 
 // Returns list of device Ids we need to allocate with Allocate rpc call.
@@ -550,7 +920,26 @@ func (m *ManagerImpl) allocateContainerResources(pod *v1.Pod, container *v1.Cont
 	allocatedDevicesUpdated := false
 	for k, v := range container.Resources.Limits {
 		resource := string(k)
-		needed := int(v.Value())
+		var allocations GPUAllocations
+		var assignDevices sets.String       // The string in this sets is a logical id
+		var err error
+		// When resource is Nvidia GPU type, needed is implemented as the number in milli unit.
+		var needed int
+		if utilfeature.DefaultFeatureGate.Enabled(kubefeatures.MultiGPUScheduling) &&
+			resource == string(v1.ResourceNvidiaGPU){
+			allocations, err = getGPURequest(pod)
+			for id, alloc := range allocations { // id here is a logical Id.
+				assignDevices.Insert(id)
+				needed += int(alloc.Amount)
+				m.mutex.Lock()
+				m.gpuActiveAllocats[id] = alloc
+				m.mutex.Unlock()
+				// TODO: in the release 530, the following line should be removed, and let method GPUToAllocate() to update
+				m.addPodGPUUsage(id, podUID)
+			}
+		} else {
+			needed = int(v.Value())
+		}
 		glog.V(3).Infof("needs %d %s", needed, resource)
 		_, registeredResource := m.allDevices[resource]
 		_, allocatedResource := m.allocatedDevices[resource]
@@ -565,7 +954,13 @@ func (m *ManagerImpl) allocateContainerResources(pod *v1.Pod, container *v1.Cont
 			m.updateAllocatedDevices(m.activePods())
 			allocatedDevicesUpdated = true
 		}
-		allocDevices, err := m.devicesToAllocate(podUID, contName, resource, needed, devicesToReuse[resource])
+		var allocDevices sets.String
+		if utilfeature.DefaultFeatureGate.Enabled(kubefeatures.MultiGPUScheduling) &&
+			resource == string(v1.ResourceNvidiaGPU){
+			allocDevices, err = m.GPUsToAllocate(podUID, contName, allocations, needed, devicesToReuse[resource])
+		} else {
+			allocDevices, err = m.devicesToAllocate(podUID, contName, resource, needed, devicesToReuse[resource])
+		}
 		if err != nil {
 			return err
 		}
@@ -591,6 +986,10 @@ func (m *ManagerImpl) allocateContainerResources(pod *v1.Pod, container *v1.Cont
 		if !ok {
 			m.mutex.Lock()
 			m.allocatedDevices = m.podDevices.devices()
+			if utilfeature.DefaultFeatureGate.Enabled(kubefeatures.MultiGPUScheduling) &&
+				resource == string(v1.ResourceNvidiaGPU) {
+				m.rollbackDecisions(allocations, allocDevices)
+			}
 			m.mutex.Unlock()
 			return fmt.Errorf("Unknown Device Plugin %s", resource)
 		}
@@ -604,6 +1003,10 @@ func (m *ManagerImpl) allocateContainerResources(pod *v1.Pod, container *v1.Cont
 			// to the actual allocated state from m.podDevices.
 			m.mutex.Lock()
 			m.allocatedDevices = m.podDevices.devices()
+			if utilfeature.DefaultFeatureGate.Enabled(kubefeatures.MultiGPUScheduling) &&
+				resource == string(v1.ResourceNvidiaGPU) {
+				m.rollbackDecisions(allocations, allocDevices)
+			}
 			m.mutex.Unlock()
 			return err
 		}
@@ -616,6 +1019,99 @@ func (m *ManagerImpl) allocateContainerResources(pod *v1.Pod, container *v1.Cont
 
 	// Checkpoints device to container allocation information.
 	return m.writeCheckpoint()
+}
+
+// rollbackDecisions method reverts the changes to the active allocations and GPUAllocationInfo when allocation is failed from device plugin
+func (m *ManagerImpl) rollbackDecisions(decisions GPUAllocations, allocDevices sets.String) {
+	for logiId, alloc := range decisions {
+		savedAlloc, found := m.gpuActiveAllocats[logiId]
+		if !found {
+			glog.Errorf("no logical Id %s related allocation found", logiId)
+			continue
+		}
+		phyId := savedAlloc.Id
+		if !allocDevices.Has(phyId) {
+			glog.Errorf("no device Id %s found in allocDevices", phyId)
+			continue
+		}
+		if alloc.Id != phyId || alloc.Amount != savedAlloc.Amount {
+			glog.Errorf("saved allocation is not consistent with current one")
+			continue
+		}
+		info, found := m.gpuAssignInfo[phyId]
+		if !found {
+			glog.Errorf("no physical Id %s related GPU assignment info is found", phyId)
+			continue
+		}
+		podId, found := info.PodIds[logiId]
+		if !found {
+			glog.Errorf("no pod Id is found binding with logical Id %s", logiId)
+			continue
+		}
+		usage, found := info.PodUsage[podId]
+		if !found {
+			glog.Errorf("no pod %s usage is found", podId)
+			continue
+		}
+		info.Usage -= usage
+		delete(info.PodUsage, podId)
+		delete(info.PodIds, logiId)
+		info.Ids.Delete(logiId)
+		delete(m.gpuActiveAllocats, logiId)
+		// if no any usage with a GPU, then remove this GPU allocation information
+		if info.Usage == 0 && info.Ids.Len() == 0 {
+			delete(m.gpuAssignInfo, phyId)
+		}
+	}
+}
+
+func getGPURequest(pod *v1.Pod) (GPUAllocations, error) {
+	requests := make(GPUAllocations)
+	gpuDecisions, found := pod.Annotations[GPUDecisionAnnotation]
+	if !found {
+		glog.Errorf("no gpu decision annotation is found")
+		return requests, fmt.Errorf("no gpu decision annotation is found")
+	}
+	decisionsArray := []byte(gpuDecisions)
+
+	decisions := make(NvidiaGPUDecision)
+	err := json.Unmarshal(decisionsArray, &decisions)
+	if err != nil {
+		glog.Errorf("failed to unmarshal gpu decision annotation")
+		return requests, fmt.Errorf("failed to unmarshal gpu decision annotation")
+	}
+
+	// In the release 430, the id from the Scheduler is physical Id, so we add a logical Id here
+	// TODO: remove the generated logical Id in the release 530, and use the id from the Scheduler and leave id in alloc as empty
+	for id, amount := range decisions {
+		logId := string(uuid.NewUUID())
+		alloc := Allocation {
+			Id: id,
+			Amount: amount,
+		}
+		requests[logId] = alloc
+	}
+
+	return requests, nil
+}
+
+func StatusJsonWithTag(mp map[string]NvidiaGPUStatus) (string, error) {
+	statusList := make([]NvidiaGPUStatus, 0)
+	for id, status := range mp {
+		newStatus := NvidiaGPUStatus{
+			Id:      id,
+			Healthy: status.Healthy,
+		}
+		statusList = append(statusList, newStatus)
+	}
+	jsonStatus, err := json.Marshal(statusList)
+	if err != nil {
+		glog.V(2).Infof("failed marshalling status list: %v", err)
+		return "", err
+	}
+	statusStr := StatusTag + string(jsonStatus)
+
+	return statusStr, nil
 }
 
 // GetDeviceRunContainerOptions checks whether we have cached containerDevices

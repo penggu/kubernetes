@@ -46,8 +46,6 @@ import (
 
 const (
 	StatusTag = "StatusTag"
-	GPUStatusAnnotation = "Huawei.com/GPU-Status"
-	GPUDecisionAnnotation = "www.huawei.com/gpu_decision"
 )
 
 // ActivePodsFunc is a function that returns a list of pods to reconcile.
@@ -1067,7 +1065,7 @@ func (m *ManagerImpl) rollbackDecisions(decisions GPUAllocations, allocDevices s
 
 func getGPURequest(pod *v1.Pod) (GPUAllocations, error) {
 	requests := make(GPUAllocations)
-	gpuDecisions, found := pod.Annotations[GPUDecisionAnnotation]
+	gpuDecisions, found := pod.Annotations[v1.NvidiaGPUDecisionAnnotationKey]
 	if !found {
 		glog.Errorf("no gpu decision annotation is found")
 		return requests, fmt.Errorf("no gpu decision annotation is found")
@@ -1093,25 +1091,6 @@ func getGPURequest(pod *v1.Pod) (GPUAllocations, error) {
 	}
 
 	return requests, nil
-}
-
-func StatusJsonWithTag(mp map[string]NvidiaGPUStatus) (string, error) {
-	statusList := make([]NvidiaGPUStatus, 0)
-	for id, status := range mp {
-		newStatus := NvidiaGPUStatus{
-			Id:      id,
-			Healthy: status.Healthy,
-		}
-		statusList = append(statusList, newStatus)
-	}
-	jsonStatus, err := json.Marshal(statusList)
-	if err != nil {
-		glog.V(2).Infof("failed marshalling status list: %v", err)
-		return "", err
-	}
-	statusStr := StatusTag + string(jsonStatus)
-
-	return statusStr, nil
 }
 
 // GetDeviceRunContainerOptions checks whether we have cached containerDevices

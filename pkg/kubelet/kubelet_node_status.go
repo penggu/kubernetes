@@ -626,7 +626,7 @@ func (kl *Kubelet) setNodeStatusMachineInfo(node *v1.Node) {
 				if node.Annotations == nil {
 					node.Annotations = make(map[string]string)
 				}
-				node.Annotations[deviceplugin.GPUStatusAnnotation] = status
+				node.Annotations[v1.NvidiaGPUStatusAnnotationKey] = status
 				glog.V(2).Infof("Setting node annotation to add node status list to Scheduler")
 			}
 			glog.V(2).Infof("Remove capacity for %s", removedResource)

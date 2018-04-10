@@ -214,7 +214,7 @@ func startMemoryThresholdNotifier(thresholds []evictionapi.Threshold, observatio
 func (m *managerImpl) synchronize(diskInfoProvider DiskInfoProvider, podFunc ActivePodsFunc, capacityProvider CapacityProvider) []*v1.Pod {
 	// if we have nothing to do, just return
 	thresholds := m.config.Thresholds
-	if len(thresholds) == 0 {
+        if len(thresholds) == 0 && !utilfeature.DefaultFeatureGate.Enabled(features.DevicePlugins) {
 		return nil
 	}
 
@@ -315,6 +315,12 @@ func (m *managerImpl) synchronize(diskInfoProvider DiskInfoProvider, podFunc Act
 	// If eviction happens in localVolumeEviction function, skip the rest of eviction action
 	if utilfeature.DefaultFeatureGate.Enabled(features.LocalStorageCapacityIsolation) {
 		if evictedPods := m.localStorageEviction(activePods); len(evictedPods) > 0 {
+			return evictedPods
+		}
+	}
+
+	if utilfeature.DefaultFeatureGate.Enabled(features.DevicePlugins) {
+		if evictedPods := m.nvidiaGPUEviction(activePods); len(evictedPods) > 0 {
 			return evictedPods
 		}
 	}
@@ -450,6 +456,68 @@ func (m *managerImpl) reclaimNodeLevelResources(resourceToReclaim v1.ResourceNam
 		}
 	}
 	return false
+}
+
+func (m *managerImpl) nvidiaGPUEviction(pods []*v1.Pod) []*v1.Pod {
+	summary, err := m.summaryProvider.Get()
+	if err != nil {
+		glog.Errorf("Could not get summary provider")
+		return nil
+	}
+
+	statsFunc := cachedStatsFunc(summary.Pods)
+	evicted := []*v1.Pod{}
+	for _, pod := range pods {
+		podStats, ok := statsFunc(pod)
+		if !ok {
+			continue
+		}
+
+		if m.podNvidiaGPULimitEviction(podStats, pod) {
+			evicted = append(evicted, pod)
+		}
+	}
+
+	return evicted
+}
+
+func (m *managerImpl) podNvidiaGPULimitEviction(podStats statsapi.PodStats, pod *v1.Pod) bool {
+	_, podLimits := apiv1resource.PodRequestsAndLimits(pod)
+	_, found := podLimits[v1.ResourceNvidiaGPU]
+	if !found {
+		return false
+	}
+
+	podNvidiaGPUTotalUsage := &resource.Quantity{}
+
+	podNvidiaGPUUsage, err := getPodNvidiaGPUUsage(podStats, pod)
+	if err != nil {
+		glog.Errorf("eviction manager: error getting pod GPU usage %v", err)
+		return false
+	}
+
+	podNvidiaGPUTotalUsage.Add(podNvidiaGPUUsage[resourceNvidiaGPU])
+	if podNvidiaGPUTotalUsage.Cmp(podLimits[v1.ResourceNvidiaGPU]) > 0 {
+		// the total usage of pod exceeds the total size limit of containers, evict the pod
+		return m.evictPod(pod, v1.ResourceNvidiaGPU, fmt.Sprintf("pod GPU usage exceeds the total limit of containers %v", podLimits[v1.ResourceNvidiaGPU]))
+	}
+	return false
+}
+
+func getPodNvidiaGPUUsage(podStats statsapi.PodStats, pod *v1.Pod) (v1.ResourceList, error) {
+	usage := resource.Quantity{Format: resource.BinarySI}
+	totalPercentage, percentage := 0.0, 0.0
+	for _, container := range podStats.Containers {
+		for _, accelerator := range container.Accelerators {
+			if accelerator.MemoryTotal > 0 {
+				percentage = float64(accelerator.ContainerMemoryUsed / accelerator.MemoryTotal)
+				totalPercentage += percentage
+			}
+		}
+	}
+	return v1.ResourceList{
+		resourceNvidiaGPU:   usage,
+	}, nil
 }
 
 // localStorageEviction checks the EmptyDir volume usage for each pod and determine whether it exceeds the specified limit and needs

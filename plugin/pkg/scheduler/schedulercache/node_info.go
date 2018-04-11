@@ -175,7 +175,11 @@ func (r *Resource) Add(rl v1.ResourceList) {
 			r.EphemeralStorage += rQuant.Value()
 		default:
 			if v1helper.IsScalarResourceName(rName) {
-				r.AddScalar(rName, rQuant.Value())
+				value := rQuant.Value()
+				if rName == v1.NvidiaGPUScalarResourceName {
+					value = rQuant.MilliValue()
+				}
+				r.AddScalar(rName, value)
 			}
 		}
 	}
@@ -387,9 +391,22 @@ func (n *NodeInfo) AddPod(pod *v1.Pod) {
 	res, non0_cpu, non0_mem := calculateResource(pod)
 	n.requestedResource.MilliCPU += res.MilliCPU
 	n.requestedResource.Memory += res.Memory
-
-	// Total NvidiaGPU amount
 	n.requestedResource.NvidiaGPU += res.NvidiaGPU
+
+	n.requestedResource.EphemeralStorage += res.EphemeralStorage
+	if n.requestedResource.ScalarResources == nil && len(res.ScalarResources) > 0 {
+		n.requestedResource.ScalarResources = map[v1.ResourceName]int64{}
+	}
+	for rName, rQuant := range res.ScalarResources {
+		n.requestedResource.ScalarResources[rName] += rQuant
+	}
+	n.nonzeroRequest.MilliCPU += non0_cpu
+	n.nonzeroRequest.Memory += non0_mem
+	n.pods = append(n.pods, pod)
+	if hasPodAffinityConstraints(pod) {
+		n.podsWithAffinity = append(n.podsWithAffinity, pod)
+	}
+
 	// Update allocation to individual GPU
 	a := pod.GetAnnotations()
 	if val, ok := a[v1.NvidiaGPUDecisionAnnotationKey]; ok {
@@ -407,20 +424,6 @@ func (n *NodeInfo) AddPod(pod *v1.Pod) {
 				n.requestedResource.AddNvidiaGpuAlloc4Pod(gpuid, podid, amount)
 			}
 		}
-	}
-
-	n.requestedResource.EphemeralStorage += res.EphemeralStorage
-	if n.requestedResource.ScalarResources == nil && len(res.ScalarResources) > 0 {
-		n.requestedResource.ScalarResources = map[v1.ResourceName]int64{}
-	}
-	for rName, rQuant := range res.ScalarResources {
-		n.requestedResource.ScalarResources[rName] += rQuant
-	}
-	n.nonzeroRequest.MilliCPU += non0_cpu
-	n.nonzeroRequest.Memory += non0_mem
-	n.pods = append(n.pods, pod)
-	if hasPodAffinityConstraints(pod) {
-		n.podsWithAffinity = append(n.podsWithAffinity, pod)
 	}
 
 	// Consume ports when pods added.
@@ -464,11 +467,7 @@ func (n *NodeInfo) RemovePod(pod *v1.Pod) error {
 
 			n.requestedResource.MilliCPU -= res.MilliCPU
 			n.requestedResource.Memory -= res.Memory
-
-			// Remove from total requested NvidiaGPU
 			n.requestedResource.NvidiaGPU -= res.NvidiaGPU
-			// Remove from individual GPU device
-			n.requestedResource.RemoveNvidiaGpuAlloc4Pod(k1)
 
 			if len(res.ScalarResources) > 0 && n.requestedResource.ScalarResources == nil {
 				n.requestedResource.ScalarResources = map[v1.ResourceName]int64{}
@@ -478,6 +477,10 @@ func (n *NodeInfo) RemovePod(pod *v1.Pod) error {
 			}
 			n.nonzeroRequest.MilliCPU -= non0_cpu
 			n.nonzeroRequest.Memory -= non0_mem
+
+			// Remove allocation from individual GPU device
+			// TODO: guard with feature gate
+			n.requestedResource.RemoveNvidiaGpuAlloc4Pod(k1)
 
 			// Release ports when remove Pods.
 			n.updateUsedPorts(pod, false)

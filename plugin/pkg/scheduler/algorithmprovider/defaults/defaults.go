@@ -253,6 +253,9 @@ func defaultPriorities() sets.String {
 
 		// Prioritizes nodes that marked with taint which pod can tolerate.
 		factory.RegisterPriorityFunction2("TaintTolerationPriority", priorities.ComputeTaintTolerationPriorityMap, priorities.ComputeTaintTolerationPriorityReduce, 1),
+
+		// Prioritizes nodes based on the closest fit for GPU request
+		factory.RegisterPriorityFunction2("BestFitGpuPriority", priorities. BestFitGpuPriorityMap, nil, 1),
 	)
 }
 

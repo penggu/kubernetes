@@ -22,6 +22,7 @@ import (
 	"os"
 	"strconv"
 	"sync"
+	"sort"
 
 	"k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
@@ -46,6 +47,7 @@ import (
 
 	"github.com/golang/glog"
 	"k8s.io/kubernetes/plugin/pkg/scheduler/volumebinder"
+	"k8s.io/apimachinery/pkg/api/resource"
 )
 
 const (
@@ -609,6 +611,9 @@ func GetResourceRequest(pod *v1.Pod) *schedulercache.Resource {
 			default:
 				if v1helper.IsScalarResourceName(rName) {
 					value := rQuantity.Value()
+					if rName == v1.NvidiaGPUScalarResourceName {
+						value = rQuantity.MilliValue()
+					}
 					if value > result.ScalarResources[rName] {
 						result.SetScalar(rName, value)
 					}
@@ -674,7 +679,7 @@ func PodFitsResources(pod *v1.Pod, meta algorithm.PredicateMetadata, nodeInfo *s
 			predicateFails = append(predicateFails, NewInsufficientResourceError(rName, podRequest.ScalarResources[rName], nodeInfo.RequestedResource().ScalarResources[rName], allocatable.ScalarResources[rName]))
 		}
 		// Check for resources on individual GPUs
-		if rName == v1.NvidiaGPUScalarResourceName && !podFitsNvidiaGPUDevice(rQuant,nodeInfo){
+		if rName == v1.NvidiaGPUScalarResourceName && !podFitsNvidiaGPUDevices(pod,nodeInfo){
 			predicateFails = append(predicateFails, ErrInsufficientResourceOnSingleGPU)
 		}
 	}
@@ -692,16 +697,72 @@ func PodFitsResources(pod *v1.Pod, meta algorithm.PredicateMetadata, nodeInfo *s
 
 // True if some GPU device on the node has enough availability for the request or if there
 // are no devices in the GPUInfoList (in which case the check trivially passes)
-func podFitsNvidiaGPUDevice(gpureq int64, nodeInfo *schedulercache.NodeInfo) bool {
+func podFitsNvidiaGPUDevices(pod *v1.Pod, nodeInfo *schedulercache.NodeInfo) bool {
 	requested := nodeInfo.RequestedResource()
+
+	// If GPU info's aren't present then we trivially pass
 	if len(requested.NvidiaGPUInfoList) == 0 {
 		return true
 	}
-	for _, gpu := range requested.NvidiaGPUInfoList {
-		if v1.NvidiaGPUMaxUsage >= gpureq + gpu.Usage {
+
+	// Make a shallow copy of the individual gpu usage
+	// We just use the copy() function because we don't care about the PodUsage map, just the
+	// overall usage of the Gpu for the purpose of finding the best fit gpus
+	GpuInfo := make([]schedulercache.NvidiaGPUInfo,len(requested.NvidiaGPUInfoList))
+	copy(GpuInfo,requested.NvidiaGPUInfoList)
+
+	// Sort the pod's containers in order of decreasing GPU request
+	containers := pod.Spec.Containers
+	sort.Slice(containers, func (i, j int) bool{
+		var vali, valj resource.Quantity
+		if _,ok := containers[i].Resources.Requests[v1.NvidiaGPUScalarResourceName]; ok {
+			vali = containers[i].Resources.Requests[v1.NvidiaGPUScalarResourceName]
+		}
+		if _,ok := containers[j].Resources.Requests[v1.NvidiaGPUScalarResourceName]; ok {
+			vali = containers[j].Resources.Requests[v1.NvidiaGPUScalarResourceName]
+		}
+		return ( vali.MilliValue() > valj.MilliValue() )
+	})
+
+	// Try to place each container on the gpus
+	for _,c := range containers {
+		if !placeOneContainerOnGpus(c,GpuInfo) {
+			return false
+		}
+	}
+
+	// All containers placed successfully
+	return true
+}
+
+// Try to place the container on the best fit GPU by sorting the GPUs in order
+// of decreasing availability and placing the container on the first GPU on the
+// list that can fit its requested amount
+func placeOneContainerOnGpus(container v1.Container, gpus []schedulercache.NvidiaGPUInfo) bool {
+	// Calculate the requested GPU amount for the container
+	amount := int64(0)
+	if _,ok := container.Resources.Requests[v1.NvidiaGPUScalarResourceName]; ok {
+		gpuQuant := container.Resources.Requests[v1.NvidiaGPUScalarResourceName]
+		amount = gpuQuant.MilliValue()
+	}
+	if amount == 0 {
+		return true
+	}
+
+	// sort the GPUs in decreasing order of availability
+	sort.Slice(gpus,func(i, j int) bool {
+		return gpus[i].Usage > gpus[j].Usage
+	})
+
+	// pick the first gpu off the list that can fit the requirement
+	for _,g := range gpus {
+		if v1.NvidiaGPUMaxUsage >= g.Usage + amount {
+			g.Usage += amount
 			return true
 		}
 	}
+
+	// none of the GPUs had enough space
 	return false
 }
 

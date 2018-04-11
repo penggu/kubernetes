@@ -40,6 +40,10 @@ import (
 
 	"github.com/golang/glog"
 	"k8s.io/kubernetes/plugin/pkg/scheduler/volumebinder"
+
+	kubefeatures "k8s.io/kubernetes/pkg/features"
+	utilfeature "k8s.io/apiserver/pkg/util/feature"
+	"encoding/json"
 )
 
 type FailedPredicateMap map[string][]algorithm.PredicateFailureReason
@@ -152,7 +156,21 @@ func (g *genericScheduler) Schedule(pod *v1.Pod, nodeLister algorithm.NodeLister
 	}
 
 	trace.Step("Selecting host")
-	return g.selectHost(priorityList)
+	host,err := g.selectHost(priorityList)
+	if err != nil {
+		return "", err
+	}
+
+	if utilfeature.DefaultFeatureGate.Enabled(kubefeatures.MultiGPUScheduling) {
+		trace.Step("Selecting GPU layout")
+		layout,err := g.selectGpuLayout(pod,g.cachedNodeInfoMap[host])
+		if err != nil {
+			return "", err
+		}
+		pod.ObjectMeta.Annotations[v1.NvidiaGPUDecisionAnnotationKey] = layout
+	}
+
+	return host,nil
 }
 
 // Prioritizers returns a slice containing all the scheduler's priority
@@ -184,6 +202,93 @@ func (g *genericScheduler) selectHost(priorityList schedulerapi.HostPriorityList
 	g.lastNodeIndexLock.Unlock()
 
 	return priorityList[ix].Host, nil
+}
+
+// place the pod's containers on the Gpus and return the json string layout decision
+func (g *genericScheduler) selectGpuLayout(pod *v1.Pod, nodeinfo *schedulercache.NodeInfo) (string, error) {
+	if len(nodeinfo.RequestedResource().NvidiaGPUInfoList) == 0 {
+		return "", fmt.Errorf("no gpu info in schedulercache")
+	}
+
+	// We make a shallow copy of the gpu info as we don't want to update the usage info here, that's
+	// done in schedulercache.NodeInfo.AddPod() which reads the result of the layout decision
+	gpus := make([]schedulercache.NvidiaGPUInfo,len(nodeinfo.RequestedResource().NvidiaGPUInfoList))
+	copy(gpus,nodeinfo.RequestedResource().NvidiaGPUInfoList)
+
+	// Sort the pod's containers in order of decreasing GPU request
+	containers := pod.Spec.Containers
+	sort.Slice(containers, func (i, j int) bool{
+		return util.HigherGpuRequestContainer(containers[i],containers[j])
+	})
+
+	// overall decision for all containers
+	decision := make(map[string]int64)
+
+	// Try to place each container on the gpus
+	for _,c := range containers {
+		subdecision,err := g.selectGpus4OneContainer(c,gpus)
+		if err != nil {
+			return "", err
+		}
+		if len(subdecision) == 0 {
+			continue
+		}
+		decision = g.AddGpuDecisions(decision,subdecision)
+	}
+
+	result,err := json.Marshal(decision)
+	if err != nil {
+		return "",err
+	}
+	return string(result[:]),nil
+}
+
+func (g *genericScheduler) selectGpus4OneContainer(container v1.Container, gpus []schedulercache.NvidiaGPUInfo) (map[string]int64, error) {
+	requested := util.GetContainerGpuRequest(&container)
+	if requested == 0 {
+		return make(map[string]int64),nil
+	}
+
+	remaining := requested
+	result := make(map[string]int64)
+
+	for remaining > 0 {
+		// if > Max, place Max, otherwise place what's left
+		to_place := remaining % v1.NvidiaGPUMaxUsage
+		if remaining > v1.NvidiaGPUMaxUsage {
+			to_place = v1.NvidiaGPUMaxUsage
+		}
+		placed := false
+
+		// sort the list in decreasing order of availability
+		sort.Slice(gpus, func(i, j int) bool {
+			return (gpus[i].Usage > gpus[j].Usage)
+		})
+
+		// pick the first gpu off the list that can fit the requirement
+		for _, g := range gpus {
+			if v1.NvidiaGPUMaxUsage >= g.Usage + to_place {
+				g.Usage += to_place
+				result[g.Id] = to_place
+				placed = true
+				break
+			}
+		}
+		if placed == false {
+			return nil, fmt.Errorf("couldn't place container")
+		}
+		remaining -= to_place
+	}
+
+	return result,nil
+}
+
+// Add the values of each key in d2 pairwise to d1, return the resulting d1
+func (g *genericScheduler) AddGpuDecisions(d1 map[string]int64, d2 map[string]int64) map[string]int64 {
+	for k,v := range d2 {
+		d1[k] += v
+	}
+	return d1
 }
 
 // preempt finds nodes with pods that can be preempted to make room for "pod" to

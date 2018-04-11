@@ -47,7 +47,6 @@ import (
 
 	"github.com/golang/glog"
 	"k8s.io/kubernetes/plugin/pkg/scheduler/volumebinder"
-	"k8s.io/apimachinery/pkg/api/resource"
 )
 
 const (
@@ -714,14 +713,7 @@ func podFitsNvidiaGPUDevices(pod *v1.Pod, nodeInfo *schedulercache.NodeInfo) boo
 	// Sort the pod's containers in order of decreasing GPU request
 	containers := pod.Spec.Containers
 	sort.Slice(containers, func (i, j int) bool{
-		var vali, valj resource.Quantity
-		if _,ok := containers[i].Resources.Requests[v1.NvidiaGPUScalarResourceName]; ok {
-			vali = containers[i].Resources.Requests[v1.NvidiaGPUScalarResourceName]
-		}
-		if _,ok := containers[j].Resources.Requests[v1.NvidiaGPUScalarResourceName]; ok {
-			vali = containers[j].Resources.Requests[v1.NvidiaGPUScalarResourceName]
-		}
-		return ( vali.MilliValue() > valj.MilliValue() )
+		return schedutil.HigherGpuRequestContainer(containers[i],containers[j])
 	})
 
 	// Try to place each container on the gpus
@@ -739,31 +731,42 @@ func podFitsNvidiaGPUDevices(pod *v1.Pod, nodeInfo *schedulercache.NodeInfo) boo
 // of decreasing availability and placing the container on the first GPU on the
 // list that can fit its requested amount
 func placeOneContainerOnGpus(container v1.Container, gpus []schedulercache.NvidiaGPUInfo) bool {
-	// Calculate the requested GPU amount for the container
-	amount := int64(0)
-	if _,ok := container.Resources.Requests[v1.NvidiaGPUScalarResourceName]; ok {
-		gpuQuant := container.Resources.Requests[v1.NvidiaGPUScalarResourceName]
-		amount = gpuQuant.MilliValue()
-	}
-	if amount == 0 {
+	requested := schedutil.GetContainerGpuRequest(&container)
+	if requested == 0 {
 		return true
 	}
+	remaining := requested
 
-	// sort the GPUs in decreasing order of availability
-	sort.Slice(gpus,func(i, j int) bool {
-		return gpus[i].Usage > gpus[j].Usage
-	})
-
-	// pick the first gpu off the list that can fit the requirement
-	for _,g := range gpus {
-		if v1.NvidiaGPUMaxUsage >= g.Usage + amount {
-			g.Usage += amount
-			return true
+	for remaining > 0 {
+		// if > Max, place Max, otherwise place what's left
+		to_place := remaining % v1.NvidiaGPUMaxUsage
+		if remaining > v1.NvidiaGPUMaxUsage {
+			to_place = v1.NvidiaGPUMaxUsage
 		}
+		placed := false
+
+		// sort the GPUs in decreasing order of availability
+		sort.Slice(gpus, func(i, j int) bool {
+			return (gpus[i].Usage > gpus[j].Usage)
+		})
+
+		// pick the first gpu(s) off the list that can fit the requirement
+		for _, g := range gpus {
+			if v1.NvidiaGPUMaxUsage >= g.Usage + to_place {
+				g.Usage += to_place
+				placed = true
+				break
+			}
+		}
+		// couldn't place some amount
+		if placed == false {
+			return false
+		}
+		remaining -= to_place
 	}
 
-	// none of the GPUs had enough space
-	return false
+	// if you're here, you placed everything
+	return true
 }
 
 // nodeMatchesNodeSelectorTerms checks if a node's labels satisfy a list of node selector terms,

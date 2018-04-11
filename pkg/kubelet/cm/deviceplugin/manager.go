@@ -111,13 +111,6 @@ type Allocation struct {
 	Amount int64
 }
 
-type NvidiaGPUStatus struct {
-	// This Id will store Physical GPU id from device plugin.
-	Id string `json:"id,omitempty"`
-	// Health Status.
-	Healthy bool `json:"healthy,omitempty"`
-}
-
 type GPUAllocationInfo struct {
 	// This Id will store logical GPU id from Scheduler in the future release, and it is filled with pod id right now.
 	Ids sets.String

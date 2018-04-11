@@ -84,6 +84,16 @@ func GetPodPriority(pod *v1.Pod) int32 {
 	return scheduling.DefaultPriorityWhenNoDefaultClassExists
 }
 
+// GetContainerGpuRequest return the amount of Gpu requested by the container
+func GetContainerGpuRequest(container *v1.Container) int64 {
+	result := int64(0)
+	if _,ok := container.Resources.Requests[v1.NvidiaGPUScalarResourceName]; ok {
+		requestedQuant := container.Resources.Requests[v1.NvidiaGPUScalarResourceName]
+		result = requestedQuant.MilliValue()
+	}
+	return result
+}
+
 // SortableList is a list that implements sort.Interface.
 type SortableList struct {
 	Items    []interface{}
@@ -117,4 +127,10 @@ func (l *SortableList) Sort() {
 // SortableList, but expects those arguments to be *v1.Pod.
 func HigherPriorityPod(pod1, pod2 interface{}) bool {
 	return GetPodPriority(pod1.(*v1.Pod)) > GetPodPriority(pod2.(*v1.Pod))
+}
+
+// Returns true when the requested gpu of the first container is higher than
+// the second one
+func HigherGpuRequestContainer(container1, container2 interface{}) bool {
+	return GetContainerGpuRequest(container1.(*v1.Container)) > GetContainerGpuRequest(container2.(*v1.Container))
 }

@@ -6,13 +6,14 @@ import (
 	"k8s.io/kubernetes/plugin/pkg/scheduler/schedulercache"
 	"sort"
 	"math"
-	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/kubernetes/plugin/pkg/scheduler/util"
 )
 
 // BestFitGpuPriorityMap is a priority function that favors nodes with the most requested individual GPU devices that meet t
 // the given pod's requirements.
 // It calculates the percentage of individual GPU device usage remaining after the pod's containers are placed on the most
-// loaded GPUs possible, and prioritizes based on the sum of the least remaining.
+// loaded GPUs possible, and prioritizes based on the sum of the least remaining.  This scheme considers the container
+// placements individually, and so may make sub-optimal decisions in the case where a pod has many containers.
 func BestFitGpuPriorityMap(pod *v1.Pod, meta interface{}, nodeInfo *schedulercache.NodeInfo) (schedulerapi.HostPriority, error) {
 	// If the pod doesn't request GPU then ignore this priority function
 	if !podHasGpuRequest(pod) {
@@ -55,41 +56,43 @@ func computeScore4AllContainers(containers []v1.Container, gpus []schedulercache
 	total := 0
 	// Sort the containers in order of decreasing GPU request
 	sort.Slice(containers, func (i, j int) bool{
-		var vali, valj resource.Quantity
-		if _,ok := containers[i].Resources.Requests[v1.NvidiaGPUScalarResourceName]; ok {
-			vali = containers[i].Resources.Requests[v1.NvidiaGPUScalarResourceName]
-		}
-		if _,ok := containers[j].Resources.Requests[v1.NvidiaGPUScalarResourceName]; ok {
-			vali = containers[j].Resources.Requests[v1.NvidiaGPUScalarResourceName]
-		}
-		return ( vali.MilliValue() > valj.MilliValue() )
+		return util.HigherGpuRequestContainer(containers[i],containers[j])
 	})
 	for _,c := range containers {
-		amount := int64(0)
-		if _,ok := c.Resources.Requests[v1.NvidiaGPUScalarResourceName]; ok {
-			gpuQuant := c.Resources.Requests[v1.NvidiaGPUScalarResourceName]
-			amount = gpuQuant.MilliValue()
-		}
-		total += computeScore4SingleContainer(amount,gpus)
+		total += computeScore4SingleContainer(c,gpus)
 	}
 	return (total / len(containers))
 }
 
-// compute a score for placing a gpu allocation amount on the best fit gpus
-func computeScore4SingleContainer(amount int64, gpus []schedulercache.NvidiaGPUInfo) int {
-	if amount == 0 {
+// compute a score for placing a gpu allocation amount on the best fit gpus, placement should never
+// fail as the node was pre-screened by the predicate stage
+func computeScore4SingleContainer(container v1.Container, gpus []schedulercache.NvidiaGPUInfo) int {
+	requested := util.GetContainerGpuRequest(&container)
+	if requested == 0 {
 		return 0
 	}
-	// sort the list in decreasing order of availability
-	sort.Slice(gpus,func(i, j int) bool {
-		return gpus[i].Usage > gpus[j].Usage
-	})
-	// pick the first gpu off the list that can fit the requirement
-	for _,g := range gpus {
-		if v1.NvidiaGPUMaxUsage >= g.Usage + amount {
-			g.Usage += amount
-			return int(math.Ceil(float64(g.Usage * schedulerapi.MaxPriority) / float64(v1.NvidiaGPUMaxUsage)))
+	result := 0
+	remaining := requested
+	for remaining > 0 {
+		// if > Max, place Max, otherwise place what's left
+		to_place := remaining % v1.NvidiaGPUMaxUsage
+		if remaining > v1.NvidiaGPUMaxUsage {
+			to_place = v1.NvidiaGPUMaxUsage
 		}
+
+		// sort the list in decreasing order of availability
+		sort.Slice(gpus,func(i, j int) bool {
+			return (gpus[i].Usage > gpus[j].Usage)
+		})
+		// pick the first gpu off the list that can fit the requirement and add the placement score
+		for _,g := range gpus {
+			if v1.NvidiaGPUMaxUsage >= g.Usage + to_place {
+				g.Usage += to_place
+				result += int(math.Ceil(float64(g.Usage * schedulerapi.MaxPriority) / float64(v1.NvidiaGPUMaxUsage)))
+				break
+			}
+		}
+		remaining -= to_place
 	}
-	return 0
+	return result
 }

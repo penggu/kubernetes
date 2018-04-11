@@ -181,7 +181,7 @@ func (m *ManagerImpl) genericDeviceUpdateCallback(resourceName string, added, up
 		if utilfeature.DefaultFeatureGate.Enabled(kubefeatures.MultiGPUScheduling) &&
 			resourceName == string(v1.ResourceNvidiaGPU) {
 				gpuStatus = NvidiaGPUStatus{
-					Id:       nil,      // this Id will be assigned a logical Id when it is allocated to a Pod.
+					Id:       "",      // this Id will be assigned a logical Id when it is allocated to a Pod.
 					Healthy:  true,
 				}
 				m.gpuStatus[dev.ID] = gpuStatus

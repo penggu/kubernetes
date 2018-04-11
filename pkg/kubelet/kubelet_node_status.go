@@ -37,8 +37,10 @@ import (
 	v1helper "k8s.io/kubernetes/pkg/apis/core/v1/helper"
 	"k8s.io/kubernetes/pkg/cloudprovider"
 	"k8s.io/kubernetes/pkg/features"
+	kubefeatures "k8s.io/kubernetes/pkg/features"
 	kubeletapis "k8s.io/kubernetes/pkg/kubelet/apis"
 	"k8s.io/kubernetes/pkg/kubelet/cadvisor"
+	"k8s.io/kubernetes/pkg/kubelet/cm/deviceplugin"
 	"k8s.io/kubernetes/pkg/kubelet/events"
 	"k8s.io/kubernetes/pkg/kubelet/util"
 	"k8s.io/kubernetes/pkg/kubelet/util/sliceutils"
@@ -46,6 +48,7 @@ import (
 	"k8s.io/kubernetes/pkg/version"
 	"k8s.io/kubernetes/pkg/volume/util/volumehelper"
 	"k8s.io/kubernetes/plugin/pkg/scheduler/algorithm"
+	"k8s.io/kubernetes/staging/src/k8s.io/apimachinery/pkg/util/sets"
 )
 
 const (
@@ -608,7 +611,24 @@ func (kl *Kubelet) setNodeStatusMachineInfo(node *v1.Node) {
 				node.Status.Capacity[k] = v
 			}
 		}
+		nameSet := sets.NewString(string(v1.ResourceCPU), string(v1.ResourceMemory), string(v1.ResourceStorage),
+			string(v1.ResourceEphemeralStorage), string(v1.ResourceNvidiaGPU))
 		for _, removedResource := range removedDevicePlugins {
+			if utilfeature.DefaultFeatureGate.Enabled(kubefeatures.MultiGPUScheduling) {
+				// if the remmovedReousrce is not contained in the nameSet and contains specific tag
+				if nameSet.Has(removedResource) {
+					continue
+				}
+				status, err := retrieveNodeStatus(removedResource)
+				if err != nil {
+					continue
+				}
+				if node.Annotations == nil {
+					node.Annotations = make(map[string]string)
+				}
+				node.Annotations[v1.NvidiaGPUStatusAnnotationKey] = status
+				glog.V(2).Infof("Setting node annotation to add node status list to Scheduler")
+			}
 			glog.V(2).Infof("Remove capacity for %s", removedResource)
 			delete(node.Status.Capacity, v1.ResourceName(removedResource))
 		}
@@ -651,6 +671,20 @@ func (kl *Kubelet) setNodeStatusMachineInfo(node *v1.Node) {
 			node.Status.Allocatable[v1.ResourceMemory] = allocatableMemory
 		}
 	}
+}
+
+func retrieveNodeStatus(s string) (string, error) {
+	tagLen := len(deviceplugin.StatusTag)
+	if len(s) <= tagLen {
+		return "", fmt.Errorf("no node status wrapped in")
+	}
+
+	tag := s[:tagLen]
+	if string(tag) != deviceplugin.StatusTag {
+		return "", fmt.Errorf("Not a node status json string")
+	}
+	statusList := s[tagLen:]
+	return statusList, nil
 }
 
 // Set versioninfo for the node.

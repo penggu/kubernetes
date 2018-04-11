@@ -233,6 +233,11 @@ const (
 	// Allow mounting a subpath of a volume in a container
 	// Do not remove this feature gate even though it's GA
 	VolumeSubpath utilfeature.Feature = "VolumeSubpath"
+
+	// owner:
+	// ga
+	// MultiGPUScheduling is used to isolate code supporting multiple GPU scheduling
+	MultiGPUScheduling utilfeature.Feature = "MultiGPUScheduling"
 )
 
 func init() {
@@ -274,6 +279,7 @@ var defaultKubernetesFeatureGates = map[utilfeature.Feature]utilfeature.FeatureS
 	ResourceLimitsPriorityFunction:              {Default: false, PreRelease: utilfeature.Alpha},
 	SupportIPVSProxyMode:                        {Default: false, PreRelease: utilfeature.Beta},
 	VolumeSubpath:                               {Default: true, PreRelease: utilfeature.GA},
+	MultiGPUScheduling:                          {Default: true, PreRelease: utilfeature.Alpha},
 
 	// inherited features from generic apiserver, relisted here to get a conflict if it is changed
 	// unintentionally on either side:

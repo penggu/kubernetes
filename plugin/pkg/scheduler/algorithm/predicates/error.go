@@ -52,7 +52,7 @@ var (
 	ErrNodeUnknownCondition                  = newPredicateFailureError("NodeUnknownCondition")
 	ErrVolumeNodeConflict                    = newPredicateFailureError("VolumeNodeAffinityConflict")
 	ErrVolumeBindConflict                    = newPredicateFailureError("VolumeBindingNoMatch")
-	ErrInsufficientResourceOnSingleGPU	 = newPredicateFailureError("InsufficientResourceOnSingleGPU")
+	ErrInsufficientResourceOnSingleGPU	     = newPredicateFailureError("InsufficientResourceOnSingleGPU")
 	// ErrFakePredicate is used for test only. The fake predicates returning false also returns error
 	// as ErrFakePredicate.
 	ErrFakePredicate = newPredicateFailureError("FakePredicateError")

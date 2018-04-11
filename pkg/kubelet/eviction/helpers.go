@@ -53,6 +53,8 @@ const (
 	resourceNodeFs v1.ResourceName = "nodefs"
 	// nodefs inodes, number.  internal to this module, used to account for local node root filesystem inodes.
 	resourceNodeFsInodes v1.ResourceName = "nodefsInodes"
+	// nvidia GPU, in percentage.  internal to this module, used to account for GPU memory usage.
+	resourceNvidiaGPU v1.ResourceName = "nvidiaGPU"
 )
 
 var (

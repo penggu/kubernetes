@@ -7,6 +7,8 @@ import (
 	"sort"
 	"math"
 	"k8s.io/kubernetes/plugin/pkg/scheduler/util"
+	"k8s.io/apiserver/pkg/util/feature"
+	"k8s.io/kubernetes/pkg/features"
 )
 
 // BestFitGpuPriorityMap is a priority function that favors nodes with the most requested individual GPU devices that meet t
@@ -15,9 +17,16 @@ import (
 // loaded GPUs possible, and prioritizes based on the sum of the least remaining.  This scheme considers the container
 // placements individually, and so may make sub-optimal decisions in the case where a pod has many containers.
 func BestFitGpuPriorityMap(pod *v1.Pod, meta interface{}, nodeInfo *schedulercache.NodeInfo) (schedulerapi.HostPriority, error) {
+	zero := makeHostPriority(nodeInfo.Node().Name,0)
+
+	// If the feature gate is disabled then ignore this priority function
+	if !feature.DefaultFeatureGate.Enabled(features.MultiGPUScheduling) {
+		return zero, nil
+	}
+
 	// If the pod doesn't request GPU then ignore this priority function
 	if !podHasGpuRequest(pod) {
-		return makeHostPriority(nodeInfo.Node().Name,0), nil
+		return zero, nil
 	}
 
 	// Make a shallow copy of the individual gpu usage

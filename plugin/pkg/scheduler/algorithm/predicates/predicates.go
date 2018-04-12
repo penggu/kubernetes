@@ -697,9 +697,13 @@ func PodFitsResources(pod *v1.Pod, meta algorithm.PredicateMetadata, nodeInfo *s
 // True if some GPU device on the node has enough availability for the request or if there
 // are no devices in the GPUInfoList (in which case the check trivially passes)
 func podFitsNvidiaGPUDevices(pod *v1.Pod, nodeInfo *schedulercache.NodeInfo) bool {
-	requested := nodeInfo.RequestedResource()
+	// If feature gate not enabled then trivially pass
+	if !utilfeature.DefaultFeatureGate.Enabled(features.MultiGPUScheduling) {
+		return true
+	}
 
 	// If GPU info's aren't present then we trivially pass
+	requested := nodeInfo.RequestedResource()
 	if len(requested.NvidiaGPUInfoList) == 0 {
 		return true
 	}

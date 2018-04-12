@@ -28,6 +28,8 @@ import (
 	priorityutil "k8s.io/kubernetes/plugin/pkg/scheduler/algorithm/priorities/util"
 	"k8s.io/kubernetes/plugin/pkg/scheduler/util"
 	"encoding/json"
+	"k8s.io/apiserver/pkg/util/feature"
+	"k8s.io/kubernetes/pkg/features"
 )
 
 var emptyResource = Resource{}
@@ -149,9 +151,11 @@ func (r *Resource) AddNvidiaGpuAlloc4Pod(gpuid string, podid string, amount int6
 
 // Remove pod from the allocation of a gpu
 func (r *Resource) RemoveNvidiaGpuAlloc4Pod(podid string) {
-	for _,gpu := range r.NvidiaGPUInfoList {
-		amount := gpu.UnsetPodUsage(podid)
-		gpu.Usage -= amount
+	if !feature.DefaultFeatureGate.Enabled(features.MultiGPUScheduling) {
+		for _, gpu := range r.NvidiaGPUInfoList {
+			amount := gpu.UnsetPodUsage(podid)
+			gpu.Usage -= amount
+		}
 	}
 }
 
@@ -409,19 +413,21 @@ func (n *NodeInfo) AddPod(pod *v1.Pod) {
 
 	// Update allocation to individual GPU
 	a := pod.GetAnnotations()
-	if val, ok := a[v1.NvidiaGPUDecisionAnnotationKey]; ok {
-		var gpuallocs v1.NvidiaGPUDecision
-		err := json.Unmarshal([]byte(val),&gpuallocs)
-		if err != nil {
-			glog.Errorf("Cannot parse json gpu decision, err: %v", err)
-		} else {
-			for gpuid,amount := range gpuallocs {
-				podid, err := getPodKey(pod)
-				if err != nil {
-					glog.Errorf("Cannot get pod key, err: %v", err)
-					continue
+	if !feature.DefaultFeatureGate.Enabled(features.MultiGPUScheduling) {
+		if val, ok := a[v1.NvidiaGPUDecisionAnnotationKey]; ok {
+			var gpuallocs v1.NvidiaGPUDecision
+			err := json.Unmarshal([]byte(val),&gpuallocs)
+			if err != nil {
+				glog.Errorf("Cannot parse json gpu decision, err: %v", err)
+			} else {
+				for gpuid,amount := range gpuallocs {
+					podid, err := getPodKey(pod)
+					if err != nil {
+						glog.Errorf("Cannot get pod key, err: %v", err)
+						continue
+					}
+					n.requestedResource.AddNvidiaGpuAlloc4Pod(gpuid, podid, amount)
 				}
-				n.requestedResource.AddNvidiaGpuAlloc4Pod(gpuid, podid, amount)
 			}
 		}
 	}
@@ -479,7 +485,6 @@ func (n *NodeInfo) RemovePod(pod *v1.Pod) error {
 			n.nonzeroRequest.Memory -= non0_mem
 
 			// Remove allocation from individual GPU device
-			// TODO: guard with feature gate
 			n.requestedResource.RemoveNvidiaGpuAlloc4Pod(k1)
 
 			// Release ports when remove Pods.

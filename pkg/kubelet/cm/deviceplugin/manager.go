@@ -89,7 +89,7 @@ type ManagerImpl struct {
 	podDevices podDevices
 
 	// NVidia GPU status map, and key is GPU physical Id.
-	gpuStatus map[string]NvidiaGPUStatus
+	gpuStatus map[string]v1.NvidiaGPUStatus
 
 	// NVidia GPU information map, and the key is GPU physical Id.
 	gpuAssignInfo map[string]GPUAllocationInfo
@@ -147,7 +147,7 @@ func newManagerImpl(socketPath string) (*ManagerImpl, error) {
 		allDevices:        make(map[string]sets.String),
 		allocatedDevices:  make(map[string]sets.String),
 		podDevices:        make(podDevices),
-		gpuStatus:         make(map[string]NvidiaGPUStatus),
+		gpuStatus:         make(map[string]v1.NvidiaGPUStatus),
 		gpuAssignInfo:     make(map[string]GPUAllocationInfo),
 		gpuActiveAllocats: make(map[string]Allocation),
 	}
@@ -170,10 +170,10 @@ func (m *ManagerImpl) genericDeviceUpdateCallback(resourceName string, added, up
 	// For now, Manager only keeps track of healthy devices.
 	// TODO: adds support to track unhealthy devices.
 	for _, dev := range kept {
-		var gpuStatus NvidiaGPUStatus
+		var gpuStatus v1.NvidiaGPUStatus
 		if utilfeature.DefaultFeatureGate.Enabled(kubefeatures.MultiGPUScheduling) &&
 			resourceName == string(v1.ResourceNvidiaGPU) {
-				gpuStatus = NvidiaGPUStatus{
+				gpuStatus = v1.NvidiaGPUStatus{
 					Id:       "",      // this Id will be assigned a logical Id when it is allocated to a Pod.
 					Healthy:  true,
 				}
@@ -490,10 +490,10 @@ func (m *ManagerImpl) GetCapacity() (v1.ResourceList, []string) {
 	return capacity, deletedResources
 }
 
-func genStatusJsonWithTag(mp map[string]NvidiaGPUStatus) (string, error) {
-	statusList := make([]NvidiaGPUStatus, 0)
+func genStatusJsonWithTag(mp map[string]v1.NvidiaGPUStatus) (string, error) {
+	statusList := make([]v1.NvidiaGPUStatus, 0)
 	for id, status := range mp {
-		newStatus := NvidiaGPUStatus{
+		newStatus := v1.NvidiaGPUStatus{
 			Id:      id,
 			Healthy: status.Healthy,
 		}

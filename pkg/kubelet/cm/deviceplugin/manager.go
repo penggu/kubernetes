@@ -89,7 +89,7 @@ type ManagerImpl struct {
 	podDevices podDevices
 
 	// NVidia GPU status map, and key is GPU physical Id.
-	gpuStatus map[string]v1.NvidiaGPUStatus
+	gpuStatus v1.NvidiaGPUStatusMap
 
 	// NVidia GPU information map, and the key is GPU physical Id.
 	gpuAssignInfo map[string]GPUAllocationInfo
@@ -124,6 +124,7 @@ type GPUAllocationInfo struct {
 
 type sourcesReadyStub struct{}
 
+
 func (s *sourcesReadyStub) AddSource(source string) {}
 func (s *sourcesReadyStub) AllReady() bool          { return true }
 
@@ -147,7 +148,7 @@ func newManagerImpl(socketPath string) (*ManagerImpl, error) {
 		allDevices:        make(map[string]sets.String),
 		allocatedDevices:  make(map[string]sets.String),
 		podDevices:        make(podDevices),
-		gpuStatus:         make(map[string]v1.NvidiaGPUStatus),
+		gpuStatus:         make(v1.NvidiaGPUStatusMap),
 		gpuAssignInfo:     make(map[string]GPUAllocationInfo),
 		gpuActiveAllocats: make(map[string]Allocation),
 	}
@@ -490,8 +491,8 @@ func (m *ManagerImpl) GetCapacity() (v1.ResourceList, []string) {
 	return capacity, deletedResources
 }
 
-func genStatusJsonWithTag(mp map[string]v1.NvidiaGPUStatus) (string, error) {
-	statusList := make([]v1.NvidiaGPUStatus, 0)
+func genStatusJsonWithTag(mp v1.NvidiaGPUStatusMap) (string, error) {
+	statusList := make(v1.NvidiaGPUStatusList, 0)
 	for id, status := range mp {
 		newStatus := v1.NvidiaGPUStatus{
 			Id:      id,

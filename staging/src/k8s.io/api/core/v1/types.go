@@ -5188,5 +5188,8 @@ type NvidiaGPUStatus struct {
 // Store all GPU statuses of a node in Node annotation
 type NvidiaGPUStatusList []NvidiaGPUStatus
 
+// Store all GPU statuses of a node in Node annotation
+type NvidiaGPUStatusMap map[string]NvidiaGPUStatus
+
 // Store scheduler GPU allocation decision in Pod annotation
 type NvidiaGPUDecision map[string]int64

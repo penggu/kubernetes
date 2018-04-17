@@ -29,6 +29,7 @@ import (
 	"k8s.io/apimachinery/pkg/selection"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/kubernetes/pkg/apis/core"
+	"k8s.io/api/core/v1"
 )
 
 // IsHugePageResourceName returns true if the resource name has the huge page
@@ -149,7 +150,7 @@ func IsStandardContainerResourceName(str string) bool {
 // IsExtendedResourceName returns true if the resource name is not in the
 // default namespace.
 func IsExtendedResourceName(name core.ResourceName) bool {
-	return !IsDefaultNamespaceResource(name)
+	return !IsDefaultNamespaceResource(name) && (name != v1.NvidiaGPUScalarResourceName)
 }
 
 // IsDefaultNamespaceResource returns true if the resource name is in the

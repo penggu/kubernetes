@@ -44,6 +44,7 @@ import (
 	kubefeatures "k8s.io/kubernetes/pkg/features"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	"encoding/json"
+	podutil "k8s.io/kubernetes/pkg/api/pod"
 )
 
 type FailedPredicateMap map[string][]algorithm.PredicateFailureReason
@@ -145,8 +146,12 @@ func (g *genericScheduler) Schedule(pod *v1.Pod, nodeLister algorithm.NodeLister
 	trace.Step("Prioritizing")
 
 	// When only one node after predicate, just use it.
-	if len(filteredNodes) == 1 {
-		return filteredNodes[0].Name, nil
+	// Skip this optimization if MultiGPUScheduling is enabled because we still have to
+	// schedule the specific devices to allocate to the pod
+	if !utilfeature.DefaultFeatureGate.Enabled(kubefeatures.MultiGPUScheduling) {
+		if len(filteredNodes) == 1 {
+			return filteredNodes[0].Name, nil
+		}
 	}
 
 	metaPrioritiesInterface := g.priorityMetaProducer(pod, g.cachedNodeInfoMap)
@@ -167,7 +172,7 @@ func (g *genericScheduler) Schedule(pod *v1.Pod, nodeLister algorithm.NodeLister
 		if err != nil {
 			return "", err
 		}
-		pod.ObjectMeta.Annotations[v1.NvidiaGPUDecisionAnnotationKey] = layout
+		podutil.AddAnnotation2Pod(pod,v1.NvidiaGPUDecisionAnnotationKey,layout)
 	}
 
 	return host,nil

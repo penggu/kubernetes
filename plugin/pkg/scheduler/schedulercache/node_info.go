@@ -139,6 +139,18 @@ func (r *Resource) AddNvidiaGpuInfo(g *NvidiaGPUInfo) {
 	r.NvidiaGPUInfoList = append(r.NvidiaGPUInfoList,*g)
 }
 
+// Update the existing info if its status changed
+func (r * Resource) UpdateNvidiaGpuInfo(g * NvidiaGPUInfo) {
+	for _,gpu := range r.NvidiaGPUInfoList {
+		if g.Id == gpu.Id {
+			gpu.Healthy = g.Healthy
+			return
+		}
+	}
+	// it wasn't in the list, add it
+	r.AddNvidiaGpuInfo(g)
+}
+
 // Add pod with given amount to the allocation of a gpu
 func (r *Resource) AddNvidiaGpuAlloc4Pod(gpuid string, podid string, amount int64) {
 	for _,gpu := range r.NvidiaGPUInfoList {
@@ -562,9 +574,9 @@ func (n *NodeInfo) SetNode(node *v1.Node) error {
 		} else {
 			// Track individual allocations in requestedResource
 			for _,status := range gpus {
-				n.requestedResource.AddNvidiaGpuInfo(
+				n.requestedResource.UpdateNvidiaGpuInfo(
 					&NvidiaGPUInfo{ Id : status.Id,
-					 	       Healthy : status.Healthy })
+					 	        Healthy : status.Healthy })
 			}
 		}
 	}

@@ -21,6 +21,7 @@ import (
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	api "k8s.io/kubernetes/pkg/apis/core"
 	"k8s.io/kubernetes/pkg/features"
+	"k8s.io/api/core/v1"
 )
 
 // Visitor is called with each object name, and returns true if visiting should continue
@@ -275,4 +276,13 @@ func DropDisabledVolumeDevicesAlphaFields(podSpec *api.PodSpec) {
 			podSpec.InitContainers[i].VolumeDevices = nil
 		}
 	}
+}
+
+// Add an annotation to a pod
+func AddAnnotation2Pod(pod *v1.Pod, key string, value string) {
+	// Lazily allocate annotations
+	if pod.ObjectMeta.Annotations == nil {
+		pod.ObjectMeta.Annotations = map[string]string{}
+	}
+	pod.ObjectMeta.Annotations[key] = value
 }

@@ -141,9 +141,9 @@ func (r *Resource) AddNvidiaGpuInfo(g *NvidiaGPUInfo) {
 
 // Update the existing info if its status changed
 func (r * Resource) UpdateNvidiaGpuInfo(g * NvidiaGPUInfo) {
-	for _,gpu := range r.NvidiaGPUInfoList {
-		if g.Id == gpu.Id {
-			gpu.Healthy = g.Healthy
+	for i,gpu := range r.NvidiaGPUInfoList {
+		if gpu.Id == g.Id {
+			r.NvidiaGPUInfoList[i].Healthy = g.Healthy
 			return
 		}
 	}
@@ -153,20 +153,22 @@ func (r * Resource) UpdateNvidiaGpuInfo(g * NvidiaGPUInfo) {
 
 // Add pod with given amount to the allocation of a gpu
 func (r *Resource) AddNvidiaGpuAlloc4Pod(gpuid string, podid string, amount int64) {
-	for _,gpu := range r.NvidiaGPUInfoList {
+	for i,gpu := range r.NvidiaGPUInfoList {
 		if gpu.Id == gpuid {
-			gpu.Usage += amount
-			gpu.SetPodUsage(podid,amount)
+			r.NvidiaGPUInfoList[i].Usage += amount
+			r.NvidiaGPUInfoList[i].SetPodUsage(podid,amount)
+			return
 		}
 	}
 }
 
 // Remove pod from the allocation of a gpu
 func (r *Resource) RemoveNvidiaGpuAlloc4Pod(podid string) {
-	if !feature.DefaultFeatureGate.Enabled(features.MultiGPUScheduling) {
-		for _, gpu := range r.NvidiaGPUInfoList {
-			amount := gpu.UnsetPodUsage(podid)
-			gpu.Usage -= amount
+	if feature.DefaultFeatureGate.Enabled(features.MultiGPUScheduling) {
+		for i := range r.NvidiaGPUInfoList {
+			amount := r.NvidiaGPUInfoList[i].UnsetPodUsage(podid)
+			r.NvidiaGPUInfoList[i].Usage -= amount
+			return
 		}
 	}
 }
@@ -425,7 +427,7 @@ func (n *NodeInfo) AddPod(pod *v1.Pod) {
 
 	// Update allocation to individual GPU
 	a := pod.GetAnnotations()
-	if !feature.DefaultFeatureGate.Enabled(features.MultiGPUScheduling) {
+	if feature.DefaultFeatureGate.Enabled(features.MultiGPUScheduling) {
 		if val, ok := a[v1.NvidiaGPUDecisionAnnotationKey]; ok {
 			var gpuallocs v1.NvidiaGPUDecision
 			err := json.Unmarshal([]byte(val),&gpuallocs)

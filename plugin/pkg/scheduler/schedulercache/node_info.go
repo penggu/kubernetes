@@ -102,17 +102,17 @@ func (g *NvidiaGPUInfo) Clone() *NvidiaGPUInfo {
 		Usage           : g.Usage,
 	}
 	for k,v := range g.PodUsage {
-		res.SetPodUsage(k,v)
+		res.AddPodUsage(k,v)
 	}
 	return res
 }
 
 // Lazily allocate pod usage map.
-func (g *NvidiaGPUInfo) SetPodUsage(podid string, usage int64) {
+func (g *NvidiaGPUInfo) AddPodUsage(podid string, usage int64) {
 	if g.PodUsage == nil {
 		g.PodUsage = map[string]int64{}
 	}
-	g.PodUsage[podid] = usage
+	g.PodUsage[podid] += usage
 }
 
 // Remove a pod usage from the map, return amount removed
@@ -156,7 +156,7 @@ func (r *Resource) AddNvidiaGpuAlloc4Pod(gpuid string, podid string, amount int6
 	for i,gpu := range r.NvidiaGPUInfoList {
 		if gpu.Id == gpuid {
 			r.NvidiaGPUInfoList[i].Usage += amount
-			r.NvidiaGPUInfoList[i].SetPodUsage(podid,amount)
+			r.NvidiaGPUInfoList[i].AddPodUsage(podid,amount)
 			return
 		}
 	}
@@ -429,18 +429,20 @@ func (n *NodeInfo) AddPod(pod *v1.Pod) {
 	a := pod.GetAnnotations()
 	if feature.DefaultFeatureGate.Enabled(features.MultiGPUScheduling) {
 		if val, ok := a[v1.NvidiaGPUDecisionAnnotationKey]; ok {
-			var gpuallocs v1.NvidiaGPUDecision
-			err := json.Unmarshal([]byte(val),&gpuallocs)
+			var decision v1.NvidiaGPUDecision
+			err := json.Unmarshal([]byte(val),&decision)
 			if err != nil {
 				glog.Errorf("Cannot parse json gpu decision, err: %v", err)
 			} else {
-				for gpuid,amount := range gpuallocs {
-					podid, err := getPodKey(pod)
-					if err != nil {
-						glog.Errorf("Cannot get pod key, err: %v", err)
-						continue
+				for _,gpualloc := range decision {
+					for gpuid, amount := range gpualloc {
+						podid, err := getPodKey(pod)
+						if err != nil {
+							glog.Errorf("Cannot get pod key, err: %v", err)
+							continue
+						}
+						n.requestedResource.AddNvidiaGpuAlloc4Pod(gpuid, podid, amount)
 					}
-					n.requestedResource.AddNvidiaGpuAlloc4Pod(gpuid, podid, amount)
 				}
 			}
 		}

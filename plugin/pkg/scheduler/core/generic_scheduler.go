@@ -227,7 +227,7 @@ func (g *genericScheduler) selectGpuLayout(pod *v1.Pod, nodeinfo *schedulercache
 	})
 
 	// overall decision for all containers
-	decision := make(map[string]int64)
+	decision := make(v1.NvidiaGPUDecision)
 
 	// Try to place each container on the gpus
 	for _,c := range containers {
@@ -238,7 +238,7 @@ func (g *genericScheduler) selectGpuLayout(pod *v1.Pod, nodeinfo *schedulercache
 		if len(subdecision) == 0 {
 			continue
 		}
-		decision = g.AddGpuDecisions(decision,subdecision)
+		decision[c.Name] = subdecision
 	}
 
 	result,err := json.Marshal(decision)
@@ -248,14 +248,14 @@ func (g *genericScheduler) selectGpuLayout(pod *v1.Pod, nodeinfo *schedulercache
 	return string(result[:]),nil
 }
 
-func (g *genericScheduler) selectGpus4OneContainer(container v1.Container, gpus []schedulercache.NvidiaGPUInfo) (map[string]int64, error) {
+func (g *genericScheduler) selectGpus4OneContainer(container v1.Container, gpus []schedulercache.NvidiaGPUInfo) (v1.NvidiaGPUContainerDecision, error) {
 	requested := util.GetContainerGpuRequest(&container)
 	if requested == 0 {
-		return make(map[string]int64),nil
+		return make(v1.NvidiaGPUContainerDecision),nil
 	}
 
 	remaining := requested
-	result := make(map[string]int64)
+	result := make(v1.NvidiaGPUContainerDecision)
 
 	for remaining > 0 {
 		// if > Max, place Max, otherwise place what's left

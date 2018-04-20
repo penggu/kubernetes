@@ -98,28 +98,38 @@ type ManagerImpl struct {
 	gpuActiveAllocats map[string]Allocation
 }
 
-// NvidiaGPUDecision maps physical GPU id to requested GPU portion in the release 430, and logical GPU id to requested number in the release 530
-type NvidiaGPUDecision map[string]int64
+// The key is a container name
+type NvidiaGPUDecision map[string]NvidiaGPUContainerDecision
+
+// THe key is a physical gpu ID, the value is the allocation amount in millis. The key will be logical GPU id to requested number in the release 530
+type NvidiaGPUContainerDecision map[string]int64
 
 // GPUAllocations maps logical GPU id to the structure with GPU device Id and requested GPU portion.
 type GPUAllocations map[string]Allocation
 
+// It stores allocation information from the Scheduler
 type Allocation struct {
 	// This Id will store Physical GPU id from device plugin.
-	Id string
+	DevId string
+	// This indicates container ID
+	ContId string
 	// GPU allocation fraction in millis unit
 	Amount int64
 }
 
+// The key is container ID, and value is amount in millis
+type ContainerAllocation map[string]int64
+
+// This struct contains a
 type GPUAllocationInfo struct {
-	// This Id will store logical GPU id from Scheduler in the future release, and it is filled with pod id right now.
+	// This Ids will store logical GPU ids from Scheduler in the release 530, right now it is allocated by kubelet.
 	Ids sets.String
 	// This map maps logical GPU id to pod id
 	PodIds map[string]string
 	// The usage sum of all pods on this GPU, and its range is [0, 1000]
 	Usage int64
 	// It uses podId as key, and the value is the use percentage of this pod on this GPU
-	PodUsage map[string]int64
+	PodUsage map[string]ContainerAllocation
 }
 
 type sourcesReadyStub struct{}
@@ -622,7 +632,8 @@ func (m *ManagerImpl) addPodGPUUsage(id string, podId string) {
 	if !found {
 		glog.Errorf("No logical Id %s related active allocation is found", id)
 	}
-	devId := alloc.Id
+	devId := alloc.DevId
+	contId := alloc.ContId
 	amount := alloc.Amount
 	m.mutex.Lock()
 	info, found := m.gpuAssignInfo[devId]
@@ -631,13 +642,14 @@ func (m *ManagerImpl) addPodGPUUsage(id string, podId string) {
 			Ids:      sets.NewString(),
 			Usage:    0,
 			PodIds:   make(map[string]string),
-			PodUsage: make(map[string]int64),
+			PodUsage: make(map[string]ContainerAllocation),
 		}
+		info.PodUsage[podId] = make(ContainerAllocation)
 		m.gpuAssignInfo[devId] = info
 	}
 	info.Ids.Insert(id)
 	info.PodIds[id] = podId
-	info.PodUsage[podId] = amount
+	info.PodUsage[podId][contId] = amount
 	info.Usage += amount
 	m.mutex.Unlock()
 	//TODO: add more handling in the future release
@@ -661,7 +673,12 @@ func (m *ManagerImpl) rmPodGPUUsage(deviceId string, podId string) {
 		glog.Errorf("no pod id %s related assignment information is found", podId)
 		return
 	}
-	info.Usage -= used
+	// calculate the usage sum of all containers in the pod
+	var podUsage int64
+	for _, u := range used {
+		podUsage += u
+	}
+	info.Usage -= podUsage
 	delete(info.PodUsage, podId)
 	var lId string
 	for logId, pId := range info.PodIds {
@@ -718,7 +735,7 @@ func (m *ManagerImpl) GPUsToAllocate(podUID, contName string, decisions GPUAlloc
 	// Check the decisions to see whether each GPU device Id there, If yes, then update allocatedDevices structure.
 	var assigned int64
 	for _, alloc := range decisions {
-		device := alloc.Id
+		device := alloc.DevId
 		if len(device) != 0 {
 			assigned += alloc.Amount
 			m.allocatedDevices[resource].Insert(device)
@@ -735,6 +752,7 @@ func (m *ManagerImpl) GPUsToAllocate(podUID, contName string, decisions GPUAlloc
 
 	// In the release 430, the following code should not be executed. If it is touched, then something is wrong
 	glog.Errorf("!!!!!!!!! something error !!!!!!!!!!!")
+	return nil, fmt.Errorf("can't find physical id in GPU assign struct")
 
 	// Allocates from reusableDevices list first.
 	// TODO: doubt that this block will really be called, and need to revisit this block again.
@@ -748,7 +766,7 @@ func (m *ManagerImpl) GPUsToAllocate(podUID, contName string, decisions GPUAlloc
 			m.allocatedDevices[resource].Insert(device)
 		}
 		devices.Insert(device)
-		needed -= 1000 - m.gpuAssignInfo[device].PodUsage[podUID]
+		needed -= m.gpuAssignInfo[device].PodUsage[podUID][contName]
 
 		// TODO: need to call m.addGPUPodUsage method here in the release 530
 
@@ -770,7 +788,7 @@ func (m *ManagerImpl) GPUsToAllocate(podUID, contName string, decisions GPUAlloc
 	// from being allocated to other pods/containers, given that we are
 	// not holding lock during the rpc call.
 	for logId := range allocated {
-		device := m.gpuActiveAllocats[logId].Id
+		device := m.gpuActiveAllocats[logId].DevId
 		podId := m.gpuAssignInfo[device].PodIds[logId]
 		m.allocatedDevices[resource].Insert(device)
 		devices.Insert(device)
@@ -788,7 +806,8 @@ func (m *ManagerImpl) allocateGPU(reqs GPUAllocations) sets.String {
 	ret := sets.NewString()
 	for logId, req := range reqs {
 		alloc := m.gpuActiveAllocats[logId]
-		alloc.Id = string("")
+		alloc.DevId = string("")
+		alloc.ContId = string("")
 		alloc.Amount = req.Amount
 		ret.Insert(logId)
 	}
@@ -1021,12 +1040,13 @@ func (m *ManagerImpl) rollbackDecisions(decisions GPUAllocations, allocDevices s
 			glog.Errorf("no logical Id %s related allocation found", logiId)
 			continue
 		}
-		phyId := savedAlloc.Id
+		phyId := savedAlloc.DevId
+		ConId := savedAlloc.ContId
 		if !allocDevices.Has(phyId) {
 			glog.Errorf("no device Id %s found in allocDevices", phyId)
 			continue
 		}
-		if alloc.Id != phyId || alloc.Amount != savedAlloc.Amount {
+		if alloc.DevId != phyId || alloc.ContId != ConId || alloc.Amount != savedAlloc.Amount {
 			glog.Errorf("saved allocation is not consistent with current one")
 			continue
 		}
@@ -1045,7 +1065,11 @@ func (m *ManagerImpl) rollbackDecisions(decisions GPUAllocations, allocDevices s
 			glog.Errorf("no pod %s usage is found", podId)
 			continue
 		}
-		info.Usage -= usage
+		var podUsage int64
+		for _, u := range usage {
+			podUsage += u
+		}
+		info.Usage -= podUsage
 		delete(info.PodUsage, podId)
 		delete(info.PodIds, logiId)
 		info.Ids.Delete(logiId)
@@ -1074,14 +1098,17 @@ func getGPURequest(pod *v1.Pod) (GPUAllocations, error) {
 	}
 
 	// In the release 430, the id from the Scheduler is physical Id, so we add a logical Id here
-	// TODO: remove the generated logical Id in the release 530, and use the id from the Scheduler and leave id in alloc as empty
-	for id, amount := range decisions {
+	// TODO: remove the generated logical Id in the release 530, and use the id from the Scheduler and leave DevId in alloc as empty
+	for cid, decs := range decisions {
 		logId := string(uuid.NewUUID())
-		alloc := Allocation {
-			Id: id,
-			Amount: amount,
+		for did, amount := range decs {
+			alloc := Allocation {
+				DevId: did,
+				ContId: cid,
+				Amount: amount,
+			}
+			requests[logId] = alloc
 		}
-		requests[logId] = alloc
 	}
 
 	return requests, nil

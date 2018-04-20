@@ -252,6 +252,10 @@ func (sched *Scheduler) preempt(preemptor *v1.Pod, scheduleErr error) (string, e
 	return nodeName, err
 }
 
+func (sched *Scheduler) assumeAndBindGpus(assumed *v1.Pod, host string) error {
+
+}
+
 // assumeAndBindVolumes will update the volume cache and then asynchronously bind volumes if required.
 //
 // If volume binding is required, then the bind volumes routine will update the pod to send it back through

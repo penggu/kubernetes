@@ -4576,7 +4576,7 @@ type NvidiaGPUStatusList []NvidiaGPUStatus
 type NvidiaGPUStatusMap map[string]NvidiaGPUStatus
 
 // Store scheduler GPU allocation decision in Pod annotation
-type NvidiaGPUDecision map[string]NvidiaGPUContainerDecision
+type NvidiaGPUPodDecision map[string]NvidiaGPUContainerDecision
 
 // The key is a physical gpu ID, and the value is the allocation amount in millis
 type NvidiaGPUContainerDecision map[string]int64

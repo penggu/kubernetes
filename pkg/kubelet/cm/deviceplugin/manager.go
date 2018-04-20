@@ -99,7 +99,7 @@ type ManagerImpl struct {
 }
 
 // The key is a container name
-type NvidiaGPUDecision map[string]NvidiaGPUContainerDecision
+type NvidiaGPUPodDecision map[string]NvidiaGPUContainerDecision
 
 // THe key is a physical gpu ID, the value is the allocation amount in millis. The key will be logical GPU id to requested number in the release 530
 type NvidiaGPUContainerDecision map[string]int64
@@ -1090,7 +1090,7 @@ func getGPURequest(pod *v1.Pod) (GPUAllocations, error) {
 	}
 	decisionsArray := []byte(gpuDecisions)
 
-	decisions := make(NvidiaGPUDecision)
+	decisions := make(NvidiaGPUPodDecision)
 	err := json.Unmarshal(decisionsArray, &decisions)
 	if err != nil {
 		glog.Errorf("failed to unmarshal gpu decision annotation")

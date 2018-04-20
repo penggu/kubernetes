@@ -429,7 +429,7 @@ func (n *NodeInfo) AddPod(pod *v1.Pod) {
 	a := pod.GetAnnotations()
 	if feature.DefaultFeatureGate.Enabled(features.MultiGPUScheduling) {
 		if val, ok := a[v1.NvidiaGPUDecisionAnnotationKey]; ok {
-			var decision v1.NvidiaGPUDecision
+			var decision v1.NvidiaGPUPodDecision
 			err := json.Unmarshal([]byte(val),&decision)
 			if err != nil {
 				glog.Errorf("Cannot parse json gpu decision, err: %v", err)

@@ -227,7 +227,7 @@ func (g *genericScheduler) selectGpuLayout(pod *v1.Pod, nodeinfo *schedulercache
 	})
 
 	// overall decision for all containers
-	decision := make(v1.NvidiaGPUDecision)
+	decision := make(v1.NvidiaGPUPodDecision)
 
 	// Try to place each container on the gpus
 	for _,c := range containers {

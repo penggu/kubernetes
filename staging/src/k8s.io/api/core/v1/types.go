@@ -5192,7 +5192,7 @@ type NvidiaGPUStatusList []NvidiaGPUStatus
 type NvidiaGPUStatusMap map[string]NvidiaGPUStatus
 
 // The key is a container name
-type NvidiaGPUDecision map[string]NvidiaGPUContainerDecision
+type NvidiaGPUPodDecision map[string]NvidiaGPUContainerDecision
 
 // THe key is a physical gpu ID, the value is the allocation amount in millis
 type NvidiaGPUContainerDecision map[string]int64

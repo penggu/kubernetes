@@ -4572,5 +4572,12 @@ type NvidiaGPUStatus struct {
 // Store all GPU statuses of a node in Node annotation
 type NvidiaGPUStatusList []NvidiaGPUStatus
 
+// The key is GPU device id.
+type NvidiaGPUStatusMap map[string]NvidiaGPUStatus
+
 // Store scheduler GPU allocation decision in Pod annotation
-type NvidiaGPUDecision map[string]int64
+type NvidiaGPUDecision map[string]NvidiaGPUContainerDecision
+
+// The key is a physical gpu ID, and the value is the allocation amount in millis
+type NvidiaGPUContainerDecision map[string]int64
+

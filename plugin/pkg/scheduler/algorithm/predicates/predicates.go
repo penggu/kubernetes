@@ -755,9 +755,9 @@ func placeOneContainerOnGpus(container v1.Container, gpus []schedulercache.Nvidi
 		})
 
 		// pick the first gpu(s) off the list that can fit the requirement
-		for _, g := range gpus {
-			if v1.NvidiaGPUMaxUsage >= g.Usage + to_place {
-				g.Usage += to_place
+		for i := range gpus {
+			if v1.NvidiaGPUMaxUsage >= gpus[i].Usage + to_place {
+				gpus[i].Usage += to_place
 				placed = true
 				break
 			}

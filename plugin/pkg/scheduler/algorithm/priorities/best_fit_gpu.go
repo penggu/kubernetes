@@ -94,10 +94,10 @@ func computeScore4SingleContainer(container v1.Container, gpus []schedulercache.
 			return (gpus[i].Usage > gpus[j].Usage)
 		})
 		// pick the first gpu off the list that can fit the requirement and add the placement score
-		for _,g := range gpus {
-			if v1.NvidiaGPUMaxUsage >= g.Usage + to_place {
-				g.Usage += to_place
-				result += int(math.Ceil(float64(g.Usage * schedulerapi.MaxPriority) / float64(v1.NvidiaGPUMaxUsage)))
+		for i := range gpus {
+			if v1.NvidiaGPUMaxUsage >= gpus[i].Usage + to_place {
+				gpus[i].Usage += to_place
+				result += int(math.Ceil(float64(gpus[i].Usage * schedulerapi.MaxPriority) / float64(v1.NvidiaGPUMaxUsage)))
 				break
 			}
 		}

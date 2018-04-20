@@ -478,6 +478,16 @@ func (m *ManagerImpl) GetCapacity() (v1.ResourceList, []string) {
 			capacity[v1.ResourceName(resourceName)] = *resource.NewQuantity(int64(devices.Len()), resource.DecimalSI)
 		}
 	}
+	if utilfeature.DefaultFeatureGate.Enabled(kubefeatures.MultiGPUScheduling) {
+		if len(m.gpuStatus) == 0 {
+			gpuStatus := v1.NvidiaGPUStatus{
+				Id:       "1234567890",
+				Healthy:  true,
+			}
+			m.gpuStatus["1234567890"] = gpuStatus
+		}
+	}
+
 	m.mutex.Unlock()
 	if needsUpdateCheckpoint {
 		m.writeCheckpoint()

@@ -461,11 +461,11 @@ func (m *ManagerImpl) GetCapacity() (v1.ResourceList, []string) {
 	m.mutex.Lock()
 	if utilfeature.DefaultFeatureGate.Enabled(kubefeatures.MultiGPUScheduling) {
 		existingDevs := make(map[string]pluginapi.Device)
-
+                resourceName := string(v1.ResourceNvidiaGPU)
 		socketPath := filepath.Join(m.socketdir, "")
-		e, err := newEndpointImpl(socketPath, v1.ResourceNvidiaGPU, existingDevs, nil)
+		e, err := newEndpointImpl(socketPath, resourceName, existingDevs, nil)
 		if err != nil {
-			glog.Errorf("Failed to dial device plugin with request %v: %v", r, err)
+			glog.Errorf("Failed to dial device plugin with request: %v", err)
 		}
 		if len(m.gpuStatus) == 0 {
 			gpuStatus := v1.NvidiaGPUStatus{
@@ -473,8 +473,8 @@ func (m *ManagerImpl) GetCapacity() (v1.ResourceList, []string) {
 				Healthy:  true,
 			}
 			m.gpuStatus[FakeDeviceId] = gpuStatus
-			m.allDevices[v1.ResourceNvidiaGPU].Insert(FakeDeviceId)
-			m.endpoints[v1.ResourceNvidiaGPU] = e
+			m.allDevices[resourceName].Insert(FakeDeviceId)
+			m.endpoints[resourceName] = e
 		}
 	}
 	for resourceName, devices := range m.allDevices {

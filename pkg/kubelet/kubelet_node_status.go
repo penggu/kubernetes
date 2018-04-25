@@ -615,6 +615,7 @@ func (kl *Kubelet) setNodeStatusMachineInfo(node *v1.Node) {
 			string(v1.ResourceEphemeralStorage), string(v1.ResourceNvidiaGPU))
 		for _, removedResource := range removedDevicePlugins {
 			if utilfeature.DefaultFeatureGate.Enabled(kubefeatures.MultiGPUScheduling) {
+				glog.V(2).Infof("removed resource name: %s", removedResource)
 				// if the remmovedReousrce is not contained in the nameSet and contains specific tag
 				if nameSet.Has(removedResource) {
 					continue
@@ -627,7 +628,7 @@ func (kl *Kubelet) setNodeStatusMachineInfo(node *v1.Node) {
 					node.Annotations = make(map[string]string)
 				}
 				node.Annotations[v1.NvidiaGPUStatusAnnotationKey] = status
-				glog.V(2).Infof("Setting node annotation to add node status list to Scheduler")
+				glog.V(2).Infof("TongC: setting node annotation to add node status list to Scheduler")
 			}
 			glog.V(2).Infof("Remove capacity for %s", removedResource)
 			delete(node.Status.Capacity, v1.ResourceName(removedResource))
@@ -681,9 +682,10 @@ func retrieveNodeStatus(s string) (string, error) {
 
 	tag := s[:tagLen]
 	if string(tag) != deviceplugin.StatusTag {
-		return "", fmt.Errorf("Not a node status json string")
+		return "", fmt.Errorf("not a node status json string")
 	}
 	statusList := s[tagLen:]
+	glog.V(2).Info("TongC: retrieve piggybacked status: %v", statusList)
 	return statusList, nil
 }
 

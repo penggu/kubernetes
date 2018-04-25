@@ -15,17 +15,6 @@ spec:
         scheduler.alpha.kubernetes.io/critical-pod: ''
     spec:
       priorityClassName: system-node-critical
-      affinity:
-        nodeAffinity:
-          requiredDuringSchedulingIgnoredDuringExecution:
-            nodeSelectorTerms:
-            - matchExpressions:
-              - key: cloud.google.com/gke-accelerator
-                operator: Exists
-      tolerations:
-      - key: "nvidia.com/gpu"
-        effect: "NoSchedule"
-        operator: "Exists"
       hostNetwork: true
       hostPID: true
       volumes:

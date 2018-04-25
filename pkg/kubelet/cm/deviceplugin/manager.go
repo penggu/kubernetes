@@ -48,8 +48,6 @@ const (
 	StatusTag = "StatusTag"
 )
 
-const FakeDeviceId = "1234567890"
-
 // ActivePodsFunc is a function that returns a list of pods to reconcile.
 type ActivePodsFunc func() []*v1.Pod
 
@@ -459,27 +457,9 @@ func (m *ManagerImpl) GetCapacity() (v1.ResourceList, []string) {
 	var capacity = v1.ResourceList{}
 	var deletedResources []string
 	m.mutex.Lock()
-	if utilfeature.DefaultFeatureGate.Enabled(kubefeatures.MultiGPUScheduling) {
-		existingDevs := make(map[string]pluginapi.Device)
-                resourceName := string(v1.ResourceNvidiaGPU)
-		socketPath := filepath.Join(m.socketdir, "")
-		e, err := newEndpointImpl(socketPath, resourceName, existingDevs, nil)
-		if err != nil {
-			glog.Errorf("Failed to dial device plugin with request: %v", err)
-		}
-		if len(m.gpuStatus) == 0 {
-			gpuStatus := v1.NvidiaGPUStatus{
-				Id:       FakeDeviceId,
-				Healthy:  true,
-			}
-			m.gpuStatus[FakeDeviceId] = gpuStatus
-			m.allDevices[resourceName].Insert(FakeDeviceId)
-			m.endpoints[resourceName] = e
-		}
-	}
 	for resourceName, devices := range m.allDevices {
 		e, ok := m.endpoints[resourceName]
-		if ((ok && e.stopGracePeriodExpired()) || !ok) && !utilfeature.DefaultFeatureGate.Enabled(kubefeatures.MultiGPUScheduling) {
+		if (ok && e.stopGracePeriodExpired()) || !ok {
 			// The resources contained in endpoints and allDevices should always be
 			// consistent. Otherwise, we run with the risk of failing to garbage
 			// collect non-existing resources or devices.
@@ -492,7 +472,7 @@ func (m *ManagerImpl) GetCapacity() (v1.ResourceList, []string) {
 			needsUpdateCheckpoint = true
 			if utilfeature.DefaultFeatureGate.Enabled(kubefeatures.MultiGPUScheduling) &&
 				resourceName == string(v1.ResourceNvidiaGPU) {
-					m.remGPUStatus()
+				m.remGPUStatus()
 			}
 		} else {
 			capacity[v1.ResourceName(resourceName)] = *resource.NewQuantity(int64(devices.Len()), resource.DecimalSI)
@@ -508,6 +488,7 @@ func (m *ManagerImpl) GetCapacity() (v1.ResourceList, []string) {
 			if err != nil {
 				glog.V(2).Infof("failed marshalling status list: %v", err)
 			}
+			glog.V(2).Infof("TongC: marshalling status list: %v", statusListJson)
 			deletedResources = append(deletedResources, statusListJson)
 		}
 	}

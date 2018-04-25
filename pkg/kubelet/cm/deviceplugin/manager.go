@@ -48,6 +48,8 @@ const (
 	StatusTag = "StatusTag"
 )
 
+const FakeDeviceId = "1234567890"
+
 // ActivePodsFunc is a function that returns a list of pods to reconcile.
 type ActivePodsFunc func() []*v1.Pod
 
@@ -457,9 +459,27 @@ func (m *ManagerImpl) GetCapacity() (v1.ResourceList, []string) {
 	var capacity = v1.ResourceList{}
 	var deletedResources []string
 	m.mutex.Lock()
+	if utilfeature.DefaultFeatureGate.Enabled(kubefeatures.MultiGPUScheduling) {
+		existingDevs := make(map[string]pluginapi.Device)
+
+		socketPath := filepath.Join(m.socketdir, "")
+		e, err := newEndpointImpl(socketPath, v1.ResourceNvidiaGPU, existingDevs, nil)
+		if err != nil {
+			glog.Errorf("Failed to dial device plugin with request %v: %v", r, err)
+		}
+		if len(m.gpuStatus) == 0 {
+			gpuStatus := v1.NvidiaGPUStatus{
+				Id:       FakeDeviceId,
+				Healthy:  true,
+			}
+			m.gpuStatus[FakeDeviceId] = gpuStatus
+			m.allDevices[v1.ResourceNvidiaGPU].Insert(FakeDeviceId)
+			m.endpoints[v1.ResourceNvidiaGPU] = e
+		}
+	}
 	for resourceName, devices := range m.allDevices {
 		e, ok := m.endpoints[resourceName]
-		if (ok && e.stopGracePeriodExpired()) || !ok {
+		if ((ok && e.stopGracePeriodExpired()) || !ok) && !utilfeature.DefaultFeatureGate.Enabled(kubefeatures.MultiGPUScheduling) {
 			// The resources contained in endpoints and allDevices should always be
 			// consistent. Otherwise, we run with the risk of failing to garbage
 			// collect non-existing resources or devices.
@@ -478,16 +498,6 @@ func (m *ManagerImpl) GetCapacity() (v1.ResourceList, []string) {
 			capacity[v1.ResourceName(resourceName)] = *resource.NewQuantity(int64(devices.Len()), resource.DecimalSI)
 		}
 	}
-	if utilfeature.DefaultFeatureGate.Enabled(kubefeatures.MultiGPUScheduling) {
-		if len(m.gpuStatus) == 0 {
-			gpuStatus := v1.NvidiaGPUStatus{
-				Id:       "1234567890",
-				Healthy:  true,
-			}
-			m.gpuStatus["1234567890"] = gpuStatus
-		}
-	}
-
 	m.mutex.Unlock()
 	if needsUpdateCheckpoint {
 		m.writeCheckpoint()

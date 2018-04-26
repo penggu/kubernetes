@@ -460,6 +460,7 @@ func (m *ManagerImpl) GetCapacity() (v1.ResourceList, []string) {
 	for resourceName, devices := range m.allDevices {
 		e, ok := m.endpoints[resourceName]
 		if (ok && e.stopGracePeriodExpired()) || !ok {
+			glog.V(6).Info("NGDM: removed resource - %s", resourceName)
 			// The resources contained in endpoints and allDevices should always be
 			// consistent. Otherwise, we run with the risk of failing to garbage
 			// collect non-existing resources or devices.
@@ -475,6 +476,7 @@ func (m *ManagerImpl) GetCapacity() (v1.ResourceList, []string) {
 				m.remGPUStatus()
 			}
 		} else {
+			glog.V(6).Info("NGDM: resource - %v, quantity - %v", resourceName, resource.DecimalSI)
 			capacity[v1.ResourceName(resourceName)] = *resource.NewQuantity(int64(devices.Len()), resource.DecimalSI)
 		}
 	}
@@ -483,12 +485,13 @@ func (m *ManagerImpl) GetCapacity() (v1.ResourceList, []string) {
 		m.writeCheckpoint()
 	}
 	if utilfeature.DefaultFeatureGate.Enabled(kubefeatures.MultiGPUScheduling) {
+		glog.V(6).Info("NGDM: length of gpuStatus is :", len(m.gpuStatus))
 		if len(m.gpuStatus) != 0 {
 			statusListJson, err := genStatusJsonWithTag(m.gpuStatus)
 			if err != nil {
-				glog.V(2).Infof("failed marshalling status list: %v", err)
+				glog.V(2).Infof("NGDM: failed marshalling status list: %v", err)
 			}
-			glog.V(2).Infof("TongC: marshalling status list: %v", statusListJson)
+			glog.V(6).Infof("NGDM: marshalling status list: %v", statusListJson)
 			deletedResources = append(deletedResources, statusListJson)
 		}
 	}

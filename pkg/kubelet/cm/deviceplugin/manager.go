@@ -98,12 +98,6 @@ type ManagerImpl struct {
 	gpuActiveAllocats map[string]Allocation
 }
 
-// The key is a container name
-type NvidiaGPUPodDecision map[string]NvidiaGPUContainerDecision
-
-// THe key is a physical gpu ID, the value is the allocation amount in millis. The key will be logical GPU id to requested number in the release 530
-type NvidiaGPUContainerDecision map[string]int64
-
 // GPUAllocations maps logical GPU id to the structure with GPU device Id and requested GPU portion.
 type GPUAllocations map[string]Allocation
 
@@ -466,6 +460,7 @@ func (m *ManagerImpl) GetCapacity() (v1.ResourceList, []string) {
 	for resourceName, devices := range m.allDevices {
 		e, ok := m.endpoints[resourceName]
 		if (ok && e.stopGracePeriodExpired()) || !ok {
+			glog.V(6).Info("NGDM: removed resource - %s", resourceName)
 			// The resources contained in endpoints and allDevices should always be
 			// consistent. Otherwise, we run with the risk of failing to garbage
 			// collect non-existing resources or devices.
@@ -478,9 +473,10 @@ func (m *ManagerImpl) GetCapacity() (v1.ResourceList, []string) {
 			needsUpdateCheckpoint = true
 			if utilfeature.DefaultFeatureGate.Enabled(kubefeatures.MultiGPUScheduling) &&
 				resourceName == string(v1.ResourceNvidiaGPU) {
-					m.remGPUStatus()
+				m.remGPUStatus()
 			}
 		} else {
+			glog.V(6).Info("NGDM: resource - %v, quantity - %v", resourceName, resource.DecimalSI)
 			capacity[v1.ResourceName(resourceName)] = *resource.NewQuantity(int64(devices.Len()), resource.DecimalSI)
 		}
 	}
@@ -489,11 +485,13 @@ func (m *ManagerImpl) GetCapacity() (v1.ResourceList, []string) {
 		m.writeCheckpoint()
 	}
 	if utilfeature.DefaultFeatureGate.Enabled(kubefeatures.MultiGPUScheduling) {
+		glog.V(6).Info("NGDM: length of gpuStatus is :", len(m.gpuStatus))
 		if len(m.gpuStatus) != 0 {
 			statusListJson, err := genStatusJsonWithTag(m.gpuStatus)
 			if err != nil {
-				glog.V(2).Infof("failed marshalling status list: %v", err)
+				glog.V(2).Infof("NGDM: failed marshalling status list: %v", err)
 			}
+			glog.V(6).Infof("NGDM: marshalling status list: %v", statusListJson)
 			deletedResources = append(deletedResources, statusListJson)
 		}
 	}
@@ -1090,7 +1088,7 @@ func getGPURequest(pod *v1.Pod) (GPUAllocations, error) {
 	}
 	decisionsArray := []byte(gpuDecisions)
 
-	decisions := make(NvidiaGPUPodDecision)
+	decisions := make(v1.NvidiaGPUPodDecision)
 	err := json.Unmarshal(decisionsArray, &decisions)
 	if err != nil {
 		glog.Errorf("failed to unmarshal gpu decision annotation")

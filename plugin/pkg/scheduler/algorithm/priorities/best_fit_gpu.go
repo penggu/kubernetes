@@ -65,7 +65,7 @@ func computeScore4AllContainers(containers []v1.Container, gpus []schedulercache
 	total := 0
 	// Sort the containers in order of decreasing GPU request
 	sort.Slice(containers, func (i, j int) bool{
-		return util.HigherGpuRequestContainer(containers[i],containers[j])
+		return util.HigherGpuRequestContainer(&containers[i],&containers[j])
 	})
 	for _,c := range containers {
 		total += computeScore4SingleContainer(c,gpus)

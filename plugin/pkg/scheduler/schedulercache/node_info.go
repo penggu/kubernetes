@@ -214,6 +214,8 @@ func (r *Resource) ResourceList() v1.ResourceList {
 	for rName, rQuant := range r.ScalarResources {
 		if v1helper.IsHugePageResourceName(rName) {
 			result[rName] = *resource.NewQuantity(rQuant, resource.BinarySI)
+		} else if rName == v1.NvidiaGPUScalarResourceName {
+			result[rName] = *resource.NewMilliQuantity(rQuant, resource.DecimalSI)
 		} else {
 			result[rName] = *resource.NewQuantity(rQuant, resource.DecimalSI)
 		}

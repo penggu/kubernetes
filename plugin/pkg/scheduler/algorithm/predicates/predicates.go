@@ -717,7 +717,7 @@ func podFitsNvidiaGPUDevices(pod *v1.Pod, nodeInfo *schedulercache.NodeInfo) boo
 	// Sort the pod's containers in order of decreasing GPU request
 	containers := pod.Spec.Containers
 	sort.Slice(containers, func (i, j int) bool{
-		return schedutil.HigherGpuRequestContainer(containers[i],containers[j])
+		return schedutil.HigherGpuRequestContainer(&containers[i],&containers[j])
 	})
 
 	// Try to place each container on the gpus

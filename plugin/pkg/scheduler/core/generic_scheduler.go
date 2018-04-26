@@ -223,7 +223,7 @@ func (g *genericScheduler) selectGpuLayout(pod *v1.Pod, nodeinfo *schedulercache
 	// Sort the pod's containers in order of decreasing GPU request
 	containers := pod.Spec.Containers
 	sort.Slice(containers, func (i, j int) bool{
-		return util.HigherGpuRequestContainer(containers[i],containers[j])
+		return util.HigherGpuRequestContainer(&containers[i],&containers[j])
 	})
 
 	// overall decision for all containers

@@ -11,4 +11,4 @@ spec:
         limits:
           memory: "64M"
           cpu: "500m"
-          nvidia.com/gpu: "500m"
+          nvidia.com/gpu: 0.25 

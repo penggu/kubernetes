@@ -73,21 +73,7 @@ func makeAllocatableResources(milliCPU, memory, nvidiaGPUs, pods, extendedA, sto
 }
 
 func makeMultiGpuNode(milliCPU, memory, nvidiaGPUs, pods, extendedA, storage, hugePageA, extendedGpus int64) v1.Node {
-	// Create GPU Annotation
-	var gpus v1.NvidiaGPUStatusList
-	for i := int64(0); i < extendedGpus; i++ {
-		gpus = append(gpus,v1.NvidiaGPUStatus{ Id: fmt.Sprintf("gpu%d",i), Healthy : true })
-	}
-	var annotations map[string]string
-	j,err := json.Marshal(gpus)
-	if err == nil {
-		annotations = map[string]string{ v1.NvidiaGPUStatusAnnotationKey: string(j) }
-	}
-
 	return v1.Node{
-		ObjectMeta: metav1.ObjectMeta{
-			Annotations: annotations,
-		},
 		Status: v1.NodeStatus{
 			Capacity: makeResources(milliCPU, memory, nvidiaGPUs, pods, extendedA, storage, hugePageA, extendedGpus * 1000).Capacity,
 			Allocatable: makeAllocatableResources(milliCPU, memory, nvidiaGPUs, pods, extendedA, storage, hugePageA, extendedGpus * 1000),
@@ -458,13 +444,6 @@ func TestPodFitsResources(t *testing.T) {
 			fits:    false,
 			test:    "extended gpu resource allocatable enforced for multiple init containers",
 			reasons: []algorithm.PredicateFailureReason{NewInsufficientResourceError(extendedGpuResource, 6000, 2000, 4000)},
-		},
-		{
-			pod: newResourcePod(schedulercache.Resource{MilliCPU: 0, Memory: 0, ScalarResources: map[v1.ResourceName]int64{extendedGpuResource: 1000}}),
-			nodeInfo: schedulercache.NewNodeInfo(newGpuPod(750,750,750,750)),
-			fits:    false,
-			test:    "extended gpu resource individual device enforced",
-			reasons: []algorithm.PredicateFailureReason{ErrInsufficientResourceOnSingleGPU},
 		},
 	}
 

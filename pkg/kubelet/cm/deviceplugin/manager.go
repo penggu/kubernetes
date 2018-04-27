@@ -167,6 +167,7 @@ func newManagerImpl(socketPath string) (*ManagerImpl, error) {
 }
 
 func (m *ManagerImpl) genericDeviceUpdateCallback(resourceName string, added, updated, deleted []pluginapi.Device) {
+	glog.V(2).Infof("NGDM: resource %s, added %d, updated %d, deleted %d", resourceName, len(added), len(updated), len(deleted))
 	kept := append(updated, added...)
 	m.mutex.Lock()
 	if _, ok := m.allDevices[resourceName]; !ok {
@@ -177,28 +178,32 @@ func (m *ManagerImpl) genericDeviceUpdateCallback(resourceName string, added, up
 	for _, dev := range kept {
 		var gpuStatus v1.NvidiaGPUStatus
 		if utilfeature.DefaultFeatureGate.Enabled(kubefeatures.MultiGPUScheduling) &&
-			resourceName == string(v1.ResourceNvidiaGPU) {
+			resourceName == string(v1.NvidiaGPUScalarResourceName) {
 				gpuStatus = v1.NvidiaGPUStatus{
-					Id:       "",      // this Id will be assigned a logical Id when it is allocated to a Pod.
+					Id:       dev.ID,
 					Healthy:  true,
 				}
 				m.gpuStatus[dev.ID] = gpuStatus
+				glog.V(2).Infof("NGDM: one kept device: %s is added to gpuStatus", dev.ID)
 		}
 		if dev.Health == pluginapi.Healthy {
 			m.allDevices[resourceName].Insert(dev.ID)
+			glog.V(2).Infof("NGDM: one kept device: %s is added to allDevices", dev.ID)
 		} else {
 			m.allDevices[resourceName].Delete(dev.ID)
 			if utilfeature.DefaultFeatureGate.Enabled(kubefeatures.MultiGPUScheduling) &&
-				resourceName == string(v1.ResourceNvidiaGPU) {
+				resourceName == string(v1.NvidiaGPUScalarResourceName) {
 				gpuStatus.Healthy = false
+				glog.V(2).Infof("NGDM: one kept device: %s became unhealty", dev.ID)
 			}
 		}
 	}
 	for _, dev := range deleted {
 		m.allDevices[resourceName].Delete(dev.ID)
 		if utilfeature.DefaultFeatureGate.Enabled(kubefeatures.MultiGPUScheduling) &&
-			resourceName == string(v1.ResourceNvidiaGPU) {
+			resourceName == string(v1.NvidiaGPUScalarResourceName) {
 				m.removeGPUAllocation(dev.ID)
+			glog.V(2).Infof("NGDM: one GPU device: %s is removed", dev.ID)
 		}
 	}
 	m.mutex.Unlock()
@@ -454,13 +459,13 @@ func (m *ManagerImpl) markResourceUnhealthy(resourceName string) {
 // requiring device plugin resources will not be scheduled till device plugin re-registers.
 func (m *ManagerImpl) GetCapacity() (v1.ResourceList, []string) {
 	needsUpdateCheckpoint := false
-	var capacity = v1.ResourceList{}
-	var deletedResources []string
+	capacity := v1.ResourceList{}
+	deletedResources := make([]string, 0)
 	m.mutex.Lock()
 	for resourceName, devices := range m.allDevices {
 		e, ok := m.endpoints[resourceName]
 		if (ok && e.stopGracePeriodExpired()) || !ok {
-			glog.V(6).Info("NGDM: removed resource - %s", resourceName)
+			glog.V(6).Infof("NGDM: removed resource - %s, %v", resourceName, ok)
 			// The resources contained in endpoints and allDevices should always be
 			// consistent. Otherwise, we run with the risk of failing to garbage
 			// collect non-existing resources or devices.
@@ -472,11 +477,11 @@ func (m *ManagerImpl) GetCapacity() (v1.ResourceList, []string) {
 			deletedResources = append(deletedResources, resourceName)
 			needsUpdateCheckpoint = true
 			if utilfeature.DefaultFeatureGate.Enabled(kubefeatures.MultiGPUScheduling) &&
-				resourceName == string(v1.ResourceNvidiaGPU) {
+				resourceName == string(v1.NvidiaGPUScalarResourceName) {
 				m.remGPUStatus()
 			}
 		} else {
-			glog.V(6).Info("NGDM: resource - %v, quantity - %v", resourceName, resource.DecimalSI)
+			glog.V(6).Infof("NGDM: resource: %s, quantity: %d", resourceName, int64(devices.Len()))
 			capacity[v1.ResourceName(resourceName)] = *resource.NewQuantity(int64(devices.Len()), resource.DecimalSI)
 		}
 	}
@@ -485,7 +490,7 @@ func (m *ManagerImpl) GetCapacity() (v1.ResourceList, []string) {
 		m.writeCheckpoint()
 	}
 	if utilfeature.DefaultFeatureGate.Enabled(kubefeatures.MultiGPUScheduling) {
-		glog.V(6).Info("NGDM: length of gpuStatus is :", len(m.gpuStatus))
+		glog.V(6).Infof("NGDM: length of gpuStatus is: %d ", len(m.gpuStatus))
 		if len(m.gpuStatus) != 0 {
 			statusListJson, err := genStatusJsonWithTag(m.gpuStatus)
 			if err != nil {
@@ -521,9 +526,11 @@ func genStatusJsonWithTag(mp v1.NvidiaGPUStatusMap) (string, error) {
 func (m *ManagerImpl) remGPUStatus() {
 	for id, _ := range m.gpuStatus {
 		delete(m.gpuStatus, id) // Release physical id related GPU status.
+		glog.V(6).Infof("NGDM: one gpu device: %s is removed from gpuStatus", id)
 	}
 	for id, _ := range m.gpuActiveAllocats {
 		delete(m.gpuActiveAllocats, id) // Logical id is not bound with any physical id now.
+		glog.V(6).Infof("NGDM: one gpu device: %s is removed from gpuActiveAllocats", id)
 	}
 }
 
@@ -614,7 +621,7 @@ func (m *ManagerImpl) rmGPUUsageByPods(removedPods []string) {
 		containerDevices := m.podDevices[podId]
 		for _, resources := range containerDevices {
 			for resource, devices := range resources {
-				if resource == string(v1.ResourceNvidiaGPU) {
+				if resource == string(v1.NvidiaGPUScalarResourceName) {
 					for id := range devices.deviceIds {
 						m.rmPodGPUUsage(id, podId)
 					}
@@ -702,7 +709,7 @@ func (m *ManagerImpl) GPUsToAllocate(podUID, contName string, decisions GPUAlloc
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 	needed := int64(required)
-	resource := string(v1.ResourceNvidiaGPU)
+	resource := string(v1.NvidiaGPUScalarResourceName)
 	// Gets list of devices that have already been allocated.
 	// This can happen if a container restarts for example.
 	devices := m.podDevices.containerDevices(podUID, contName, resource)
@@ -929,13 +936,13 @@ func (m *ManagerImpl) allocateContainerResources(pod *v1.Pod, container *v1.Cont
 	allocatedDevicesUpdated := false
 	for k, v := range container.Resources.Limits {
 		resource := string(k)
-		var allocations GPUAllocations
-		var assignDevices sets.String       // The string in this sets is a logical id
+		allocations := make(GPUAllocations)
+		assignDevices := sets.NewString()       // The string in this sets is a logical id
 		var err error
 		// When resource is Nvidia GPU type, needed is implemented as the number in milli unit.
 		var needed int
 		if utilfeature.DefaultFeatureGate.Enabled(kubefeatures.MultiGPUScheduling) &&
-			resource == string(v1.ResourceNvidiaGPU){
+			resource == string(v1.NvidiaGPUScalarResourceName){
 			allocations, err = getGPURequest(pod)
 			for id, alloc := range allocations { // id here is a logical Id.
 				assignDevices.Insert(id)
@@ -963,9 +970,9 @@ func (m *ManagerImpl) allocateContainerResources(pod *v1.Pod, container *v1.Cont
 			m.updateAllocatedDevices(m.activePods())
 			allocatedDevicesUpdated = true
 		}
-		var allocDevices sets.String
+		allocDevices := sets.NewString()
 		if utilfeature.DefaultFeatureGate.Enabled(kubefeatures.MultiGPUScheduling) &&
-			resource == string(v1.ResourceNvidiaGPU){
+			resource == string(v1.NvidiaGPUScalarResourceName){
 			allocDevices, err = m.GPUsToAllocate(podUID, contName, allocations, needed, devicesToReuse[resource])
 		} else {
 			allocDevices, err = m.devicesToAllocate(podUID, contName, resource, needed, devicesToReuse[resource])
@@ -996,7 +1003,7 @@ func (m *ManagerImpl) allocateContainerResources(pod *v1.Pod, container *v1.Cont
 			m.mutex.Lock()
 			m.allocatedDevices = m.podDevices.devices()
 			if utilfeature.DefaultFeatureGate.Enabled(kubefeatures.MultiGPUScheduling) &&
-				resource == string(v1.ResourceNvidiaGPU) {
+				resource == string(v1.NvidiaGPUScalarResourceName) {
 				m.rollbackDecisions(allocations, allocDevices)
 			}
 			m.mutex.Unlock()
@@ -1013,7 +1020,7 @@ func (m *ManagerImpl) allocateContainerResources(pod *v1.Pod, container *v1.Cont
 			m.mutex.Lock()
 			m.allocatedDevices = m.podDevices.devices()
 			if utilfeature.DefaultFeatureGate.Enabled(kubefeatures.MultiGPUScheduling) &&
-				resource == string(v1.ResourceNvidiaGPU) {
+				resource == string(v1.NvidiaGPUScalarResourceName) {
 				m.rollbackDecisions(allocations, allocDevices)
 			}
 			m.mutex.Unlock()

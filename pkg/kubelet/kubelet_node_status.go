@@ -605,6 +605,8 @@ func (kl *Kubelet) setNodeStatusMachineInfo(node *v1.Node) {
 		}
 
 		devicePluginCapacity, removedDevicePlugins := kl.containerManager.GetDevicePluginResourceCapacity()
+		glog.V(6).Infof("NGDM: devicePluginCapacity: %v", devicePluginCapacity)
+		glog.V(6).Infof("NGDM: removedDevicePlugins: %v", removedDevicePlugins)
 		if devicePluginCapacity != nil {
 			for k, v := range devicePluginCapacity {
 				glog.V(2).Infof("Update capacity for %s to %d", k, v.Value())
@@ -612,25 +614,26 @@ func (kl *Kubelet) setNodeStatusMachineInfo(node *v1.Node) {
 			}
 		}
 		nameSet := sets.NewString(string(v1.ResourceCPU), string(v1.ResourceMemory), string(v1.ResourceStorage),
-			string(v1.ResourceEphemeralStorage), string(v1.ResourceNvidiaGPU))
+			string(v1.ResourceEphemeralStorage), string(v1.NvidiaGPUScalarResourceName))
 		for _, removedResource := range removedDevicePlugins {
 			if utilfeature.DefaultFeatureGate.Enabled(kubefeatures.MultiGPUScheduling) {
-				glog.V(2).Infof("removed resource name: %s", removedResource)
+				glog.V(6).Infof("NGDM: removed resource name: %s", removedResource)
 				// if the remmovedReousrce is not contained in the nameSet and contains specific tag
-				if nameSet.Has(removedResource) {
-					continue
+				if !nameSet.Has(removedResource) {
+					status, err := retrieveNodeStatus(removedResource)
+					if err == nil {
+						if node.Annotations == nil {
+							node.Annotations = make(map[string]string)
+						}
+						node.Annotations[v1.NvidiaGPUStatusAnnotationKey] = status
+						glog.V(6).Infof("NGDM: setting node annotation to add node status list to Scheduler")
+						continue
+					}
+				} else {
+					glog.V(6).Infof("NGDM: has removed resource name: %s", removedResource)
 				}
-				status, err := retrieveNodeStatus(removedResource)
-				if err != nil {
-					continue
-				}
-				if node.Annotations == nil {
-					node.Annotations = make(map[string]string)
-				}
-				node.Annotations[v1.NvidiaGPUStatusAnnotationKey] = status
-				glog.V(2).Infof("TongC: setting node annotation to add node status list to Scheduler")
 			}
-			glog.V(2).Infof("Remove capacity for %s", removedResource)
+			glog.V(6).Infof("NGDM: Remove capacity for %s", removedResource)
 			delete(node.Status.Capacity, v1.ResourceName(removedResource))
 		}
 	}
@@ -685,7 +688,7 @@ func retrieveNodeStatus(s string) (string, error) {
 		return "", fmt.Errorf("not a node status json string")
 	}
 	statusList := s[tagLen:]
-	glog.V(2).Info("TongC: retrieve piggybacked status: %v", statusList)
+	glog.V(2).Info("NGDM: retrieve piggybacked status: %v", statusList)
 	return statusList, nil
 }
 
